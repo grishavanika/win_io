@@ -1,0 +1,37 @@
+version: 1.0.{build}
+image: Visual Studio 2017
+
+environment:
+  matrix:
+    - compiler: clang
+    - compiler: cl
+    - compiler: gcc
+
+configuration:
+  #- Debug
+  - Release
+
+platform:
+  # TODO: will not work properly for GCC case
+  # (different MinGW installations needed)
+  #- x86
+  - x64
+
+build_script:
+  # Setup Python
+  - set path=%path%;C:\Python36-x64
+  - pip install pathlib
+  - pip install enum34
+  # Setup GCC (https://www.appveyor.com/docs/build-environment/#mingw-msys-cygwin)
+  # Workaround for CMake (exclude sh.exe from PATH that comes with Git)
+  - set path=%path:C:\Program Files\Git\usr\bin;=%
+  - set path=%path%;C:\mingw-w64\x86_64-7.2.0-posix-seh-rt_v5-rev1\mingw64\bin
+  # Configure & build
+  - cd tools
+  - python generate_project.py --compiler=%compiler% --platform=%platform%
+  # TODO: let's generate_project.py gives the name to us
+  - cd ../build_%compiler%_%platform%
+  - cmake --build . --config %configuration%
+
+test_script:
+  - ctest -C %configuration% --verbose

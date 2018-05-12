@@ -1,0 +1,55 @@
+language: cpp
+dist: trusty
+sudo: false
+
+notifications:
+  email: false
+
+matrix:
+  include:
+    # GCC 7
+    - os: linux
+      addons:
+        apt:
+          sources:
+            - ubuntu-toolchain-r-test
+          packages:
+            - g++-7
+      env:
+        - compiler_setup="CC=gcc-7 && CXX=g++-7"
+        - compiler=gcc
+        - platform=x64
+        - config=Release
+        - build_folder=build_gcc_x64
+    # Clang 5
+    - os: linux
+      addons:
+        apt:
+          sources:
+            - llvm-toolchain-trusty-5.0
+          packages:
+            - clang-5.0
+      env:
+        - compiler_setup="CC=clang-5.0 && CXX=clang++-5.0"
+        - compiler=clang
+        - platform=x64
+        - config=Release
+        - build_folder=build_clang_x64
+
+before_install:
+  - eval "${compiler_setup}"
+  - echo "compiler=$compiler"
+  - echo "platform=$platform"
+  - echo "build_folder=$build_folder"
+  
+script:
+  # Configure & build
+  - cd tools
+  - python3 generate_project.py --compiler=$compiler --platform=$platform
+  # TODO: let's generate_project.py gives the name to us
+  - cd ../$build_folder
+  - cmake --build . --config $config
+  #- cmake -DBUILD_TYPE=$config -P cmake_install.cmake
+  # TODO: investigate why it can't find tests ONLY in Travis environment
+  # - ctest -C $config --verbose
+
