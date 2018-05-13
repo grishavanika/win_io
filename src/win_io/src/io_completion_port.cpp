@@ -1,8 +1,8 @@
 #include <win_io/detail/io_completion_port.h>
-#include <win_io/detail/last_error_utils.h>
-#include <win_io/detail/io_completion_port_errors.h>
 
 #include <limits>
+
+#include <cassert>
 
 #include <Windows.h>
 
@@ -32,5 +32,83 @@ IoCompletionPort::IoCompletionPort(std::uint32_t concurrent_threads_hint)
 IoCompletionPort::~IoCompletionPort()
 {
 	const bool ok = ::CloseHandle(io_port_);
+	assert(ok && "[Io] ::CloseHandle() on IoCompletionPort failed");
 	(void)ok;
+}
+
+void IoCompletionPort::post(const PortData& data)
+{
+	std::error_code ec;
+	post(data, ec);
+	throw_if_error<IoCompletionPortError>("[Io] post() failed", ec);
+}
+
+void IoCompletionPort::post(const PortData& data, std::error_code& ec)
+{
+	ec = std::error_code();
+	const BOOL ok = ::PostQueuedCompletionStatus(io_port_, data.value, data.key
+		, static_cast<LPOVERLAPPED>(data.ptr));
+	if (!ok)
+	{
+		ec = make_last_error_code();
+	}
+}
+
+std::optional<PortData> IoCompletionPort::get(std::error_code& ec)
+{
+	return wait_impl(INFINITE, ec);
+}
+
+PortData IoCompletionPort::get()
+{
+	std::error_code ec;
+	auto data = get(ec);
+	if (ec)
+	{
+		throw_error<IoCompletionPortQueryError>(ec, "[Io] post() failed"
+			, std::move(data));
+	}
+	return *data;
+}
+
+std::optional<PortData> IoCompletionPort::query(std::error_code& ec)
+{
+	return wait_impl(0/*no blocking wait*/, ec);
+}
+
+std::optional<PortData> IoCompletionPort::query()
+{
+	std::error_code ec;
+	auto data = query(ec);
+	if (ec)
+	{
+		throw_error<IoCompletionPortQueryError>(ec, "[Io] query() failed"
+			, std::move(data));
+	}
+	return data;
+}
+
+std::optional<PortData> IoCompletionPort::wait_impl(
+	WinDWORD milliseconds, std::error_code& ec)
+{
+	DWORD bytes_transferred = 0;
+	ULONG_PTR completion_key = 0;
+	LPOVERLAPPED overlapped = nullptr;
+
+	const BOOL status = ::GetQueuedCompletionStatus(io_port_
+		, &bytes_transferred, &completion_key, &overlapped, milliseconds);
+	PortData data(bytes_transferred, completion_key, overlapped);
+
+	if (status)
+	{
+		ec = std::error_code();
+		return data;
+	}
+
+	ec = make_last_error_code();
+	if (overlapped)
+	{
+		return data;
+	}
+	return std::nullopt;
 }

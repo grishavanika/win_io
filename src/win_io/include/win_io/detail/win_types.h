@@ -8,6 +8,7 @@ namespace wi
 
 		using WinHANDLE = void*;
 		using WinDWORD = std::uint32_t;
+		using WinULONG_PTR = std::uintptr_t;
 
 	} // namespace detail
 } // namespace wi

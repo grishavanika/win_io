@@ -1,5 +1,8 @@
 #pragma once
-#include <win_io/detail/win_types.h>
+#include <win_io/detail/io_completion_port_errors.h>
+#include <win_io/detail/last_error_utils.h>
+
+#include <chrono>
 
 #include <cstdint>
 
@@ -21,9 +24,61 @@ namespace wi
 			IoCompletionPort(IoCompletionPort&&) = delete;
 			IoCompletionPort& operator=(IoCompletionPort&&) = delete;
 
+			void post(const PortData& data, std::error_code& ec);
+			void post(const PortData& data);
+
+			// It's possible to have valid data, but still receive some `error_code`.
+			// See https://xania.org/200807/iocp article for possible
+			// combination of results from the call to ::GetQueuedCompletionStatus().
+			// Also, check original documentation
+			std::optional<PortData> get(std::error_code& ec);
+			PortData get();
+
+			std::optional<PortData> query(std::error_code& ec);
+			std::optional<PortData> query();
+
+			template<typename Rep, typename Period>
+			std::optional<PortData> wait_for(std::chrono::duration<Rep, Period> time
+				, std::error_code& ec);
+
+			template<typename Rep, typename Period>
+			std::optional<PortData> wait_for(std::chrono::duration<Rep, Period> time);
+
+		private:
+			std::optional<PortData> wait_impl(WinDWORD milliseconds, std::error_code& ec);
+
 		private:
 			WinHANDLE io_port_;
 		};
+
+	} // namespace detail
+} // namespace wi
+
+namespace wi
+{
+	namespace detail
+	{
+
+		template<typename Rep, typename Period>
+		std::optional<PortData> IoCompletionPort::wait_for(
+			std::chrono::duration<Rep, Period> time, std::error_code& ec)
+		{
+			const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(time);
+			return wait_impl(static_cast<WinDWORD>(ms.count()), ec);
+		}
+
+		template<typename Rep, typename Period>
+		std::optional<PortData> IoCompletionPort::wait_for(std::chrono::duration<Rep, Period> time)
+		{
+			std::error_code ec;
+			auto data = wait_impl(std::move(time), ec);
+			if (ec)
+			{
+				throw_error<IoCompletionPortQueryError>(ec, "[Io] wait_for() failed"
+					, std::move(data));
+			}
+			return data;
+		}
 
 	} // namespace detail
 } // namespace wi
