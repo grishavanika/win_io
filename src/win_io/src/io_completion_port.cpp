@@ -88,6 +88,28 @@ std::optional<PortData> IoCompletionPort::query()
 	return data;
 }
 
+void IoCompletionPort::associate_device(WinHANDLE device, WinULONG_PTR key
+	, std::error_code& ec)
+{
+	associate_with_impl(device, key, ec);
+}
+
+void IoCompletionPort::associate_device(WinHANDLE device, WinULONG_PTR key)
+{
+	associate_with_impl(device, key);
+}
+
+void IoCompletionPort::associate_socket(WinSOCKET socket, WinULONG_PTR key
+	, std::error_code& ec)
+{
+	associate_with_impl(socket, key, ec);
+}
+
+void IoCompletionPort::associate_socket(WinSOCKET socket, WinULONG_PTR key)
+{
+	associate_with_impl(socket, key);
+}
+
 std::optional<PortData> IoCompletionPort::wait_impl(
 	WinDWORD milliseconds, std::error_code& ec)
 {
@@ -111,4 +133,32 @@ std::optional<PortData> IoCompletionPort::wait_impl(
 		return data;
 	}
 	return std::nullopt;
+}
+
+void IoCompletionPort::associate_with_impl(
+	WinHANDLE device, WinULONG_PTR key, std::error_code& ec)
+{
+	ec = std::error_code();
+	const auto this_port = ::CreateIoCompletionPort(device
+		, io_port_ // Attach to existing
+		, key
+		, 0);
+	if (!this_port)
+	{
+		ec = make_last_error_code();
+		return;
+	}
+	assert(this_port == io_port_ && "[Io] Expected to have same Io Port");
+}
+
+void IoCompletionPort::associate_with_impl(WinHANDLE device, WinULONG_PTR key)
+{
+	std::error_code ec;
+	associate_with_impl(device, key, ec);
+	throw_if_error<IoCompletionPortError>("[Io] associate() failed", ec);
+}
+
+WinHANDLE IoCompletionPort::native_handle()
+{
+	return io_port_;
 }

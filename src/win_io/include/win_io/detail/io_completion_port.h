@@ -44,8 +44,21 @@ namespace wi
 			template<typename Rep, typename Period>
 			std::optional<PortData> wait_for(std::chrono::duration<Rep, Period> time);
 
+			void associate_device(WinHANDLE device, WinULONG_PTR key
+				, std::error_code& ec);
+			void associate_device(WinHANDLE device, WinULONG_PTR key);
+
+			void associate_socket(WinSOCKET socket, WinULONG_PTR key
+				, std::error_code& ec);
+			void associate_socket(WinSOCKET socket, WinULONG_PTR key);
+
+			WinHANDLE native_handle();
+
 		private:
 			std::optional<PortData> wait_impl(WinDWORD milliseconds, std::error_code& ec);
+			void associate_with_impl(WinHANDLE device, WinULONG_PTR key
+				, std::error_code& ec);
+			void associate_with_impl(WinHANDLE device, WinULONG_PTR key);
 
 		private:
 			WinHANDLE io_port_;

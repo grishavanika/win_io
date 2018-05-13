@@ -7,6 +7,7 @@ namespace wi
 	{
 
 		using WinHANDLE = void*;
+		using WinSOCKET = void*;
 		using WinDWORD = std::uint32_t;
 		using WinULONG_PTR = std::uintptr_t;
 

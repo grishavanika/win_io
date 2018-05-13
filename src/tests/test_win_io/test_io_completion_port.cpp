@@ -1,10 +1,58 @@
 #include <gtest/gtest.h>
 #include <win_io/detail/io_completion_port.h>
 
+#include <Windows.h>
+
+#include <cstdio>
+
 using wi::detail::IoCompletionPort;
 using wi::detail::PortData;
 
 using namespace std::chrono_literals;
+
+namespace
+{
+	class IoCompletionPortFileTest : public ::testing::Test
+	{
+	protected:
+		virtual void SetUp() override
+		{
+#if (_MSC_VER)
+			char temp_name[L_tmpnam_s]{};
+			const errno_t ec = tmpnam_s(temp_name);
+			ASSERT_EQ(0, ec)
+				<< "Failed to generate temp file name: " << ec;
+#else
+			const char* temp_name = std::tmpnam(nullptr);
+			ASSERT_NE(nullptr, temp_name)
+				<< "Failed to generate temp file name";
+#endif
+				
+			file_ = ::CreateFileA(temp_name
+				, GENERIC_WRITE
+				, FILE_SHARE_READ
+				, nullptr
+				, CREATE_NEW
+				, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED | FILE_FLAG_DELETE_ON_CLOSE
+				, nullptr);
+			ASSERT_NE(INVALID_HANDLE_VALUE, file_)
+				<< "Failed to open temp file for async. write. "
+				<< "File name: " << temp_name;
+			
+			ov_ = OVERLAPPED();
+		}
+
+		virtual void TearDown() override
+		{
+			::CloseHandle(file_);
+		}
+
+	protected:
+		IoCompletionPort io_;
+		OVERLAPPED ov_;
+		HANDLE file_;
+	};
+} // namespace
 
 TEST(IoCompletionPort, Creation_Does_Not_Throw)
 {
@@ -54,3 +102,44 @@ TEST(IoCompletionPort, Wait_Fails_Until_Post)
 	ASSERT_EQ(send_data, *receive_data);
 }
 
+TEST(IoCompletionPort, Associating_Invalid_Handle_Returns_Error)
+{
+	IoCompletionPort port;
+	std::error_code ec;
+	port.associate_device(INVALID_HANDLE_VALUE, 1, ec);
+	ASSERT_TRUE(ec);
+}
+
+TEST(IoCompletionPort, Associating_Invalid_Socket_Returns_Error)
+{
+	IoCompletionPort port;
+	std::error_code ec;
+	port.associate_socket(nullptr, 2, ec);
+	ASSERT_TRUE(ec);
+}
+
+TEST_F(IoCompletionPortFileTest, Async_File_Write)
+{
+	std::error_code ec;
+	io_.associate_device(file_, 1, ec);
+	ASSERT_FALSE(ec)
+		<< "Associate with file failed: " << ec << ". "
+		<< "IoPort: " << io_.native_handle() << ". "
+		<< "File: " << file_;
+
+	char buffer[1 * 1024] = "Some text with zeroes at the end";
+	ov_.Offset = 0;
+	const BOOL status = ::WriteFile(file_, buffer, _countof(buffer), nullptr, &ov_);
+	const bool async_start = !status && (::GetLastError() == ERROR_IO_PENDING);
+	if (!async_start)
+	{
+		ASSERT_TRUE(status) << "Async. write to file failed: " << ::GetLastError();
+		return;
+	}
+	const auto written = io_.get(ec);
+	ASSERT_TRUE(written)
+		<< "Failed to wait for write end: " << ec;
+	ASSERT_EQ(_countof(buffer), written->value);
+	ASSERT_EQ(1u, written->key);
+	ASSERT_EQ(&ov_, written->ptr);
+}
