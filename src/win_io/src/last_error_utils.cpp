@@ -6,7 +6,7 @@ namespace wi
 {
 	namespace detail
 	{
-		std::uint32_t GetLastWinError()
+		WinDWORD GetLastWinError()
 		{
 			return ::GetLastError();
 		}

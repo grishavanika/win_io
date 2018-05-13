@@ -1,4 +1,6 @@
 #pragma once
+#include <win_io/detail/win_types.h>
+
 #include <system_error>
 #include <type_traits>
 
@@ -8,10 +10,10 @@ namespace wi
 {
 	namespace detail
 	{
-		std::uint32_t GetLastWinError();
+		WinDWORD GetLastWinError();
 
-		// Using std::uint32_t to be compatible with DWORD without leak of Windows.h.
-		inline std::error_code make_last_error_code(std::uint32_t last_error = GetLastWinError())
+		inline std::error_code make_last_error_code(
+			WinDWORD last_error = GetLastWinError())
 		{
 			// Using `system_category` with implicit assumption that
 			// MSVC's implementation will add proper error code message for free
@@ -24,7 +26,8 @@ namespace wi
 
 		template<typename E
 			, typename = std::enable_if_t<ModelsSystemError<E>::value>>
-		[[noreturn]] void throw_last_error(std::uint32_t last_error = GetLastWinError())
+		[[noreturn]] void throw_last_error(
+			WinDWORD last_error = GetLastWinError())
 		{
 			throw E(make_last_error_code(last_error));
 		}
@@ -32,7 +35,7 @@ namespace wi
 		template<typename E
 			, typename = std::enable_if_t<ModelsSystemError<E>::value>>
 		[[noreturn]] void throw_last_error(const char* message
-			, std::uint32_t last_error = GetLastWinError())
+			, WinDWORD last_error = GetLastWinError())
 		{
 			throw E(make_last_error_code(last_error), message);
 		}
