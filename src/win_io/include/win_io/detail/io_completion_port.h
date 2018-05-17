@@ -84,7 +84,7 @@ namespace wi
 		std::optional<PortData> IoCompletionPort::wait_for(std::chrono::duration<Rep, Period> time)
 		{
 			std::error_code ec;
-			auto data = wait_impl(std::move(time), ec);
+			auto data = wait_for(std::move(time), ec);
 			if (ec)
 			{
 				throw_error<IoCompletionPortQueryError>(ec, "[Io] wait_for() failed"
