@@ -1,4 +1,11 @@
-# Project
+# Samples for Windows I/O Completion Ports
 
-[![Build Status (Windows)](https://ci.appveyor.com/api/projects/status/5c1u1pjffcfe5i9x?svg=true)](https://ci.appveyor.com/project/grishavanika/cpp-initial-cmake)
-[![Build Status (Linux)](https://travis-ci.org/grishavanika/cpp_initial_cmake.svg)](https://travis-ci.org/grishavanika/cpp_initial_cmake)
+[![Build Status (Windows)](https://ci.appveyor.com/api/projects/status/l8ii5sgufhfu8ojx?svg=true
+)](https://ci.appveyor.com/project/grishavanika/win-io)
+
+# Use-cases
+
+- Directory changes (`::ReadDirectoryChangesW()` [1])
+
+[1]: https://msdn.microsoft.com/en-us/library/windows/desktop/aa365465(v=vs.85).aspx
+
