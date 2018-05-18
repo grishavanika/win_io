@@ -113,7 +113,7 @@ namespace wi
 
 		inline DirectoryChangesRange::const_iterator DirectoryChangesRange::begin() const
 		{
-			return iterator(buffer_);
+			return const_iterator(buffer_);
 		}
 
 		inline DirectoryChangesRange::const_iterator DirectoryChangesRange::cbegin()
@@ -133,7 +133,7 @@ namespace wi
 
 		inline DirectoryChangesRange::const_iterator DirectoryChangesRange::end() const
 		{
-			return iterator();
+			return const_iterator();
 		}
 
 		inline DirectoryChangesRange::const_iterator DirectoryChangesRange::cend()

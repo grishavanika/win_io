@@ -90,6 +90,22 @@ namespace
 		std::wstring dir_name_;
 		std::vector<std::wstring> created_files_;
 	};
+
+	bool EndsWith(const std::wstring& str, const std::wstring_view& end)
+	{
+#if defined(_MSC_VER)
+		const auto pos = str.rfind(end);
+		if (pos == str.npos)
+		{
+			return false;
+		}
+		return (str.size() == (pos + end.size()));
+#else
+		// GCC does not support std::string.find(std::string_view) yet
+		return false;
+#endif
+	}
+
 } // namespace
 
 TEST_F(DirectoryChangesTest, IOPort_Receives_File_Added_Event_After_File_Creation)
@@ -105,12 +121,6 @@ TEST_F(DirectoryChangesTest, IOPort_Receives_File_Added_Event_After_File_Creatio
 
 	const auto info = *changes.begin();
 	ASSERT_EQ(static_cast<DWORD>(FILE_ACTION_ADDED), info.action);
-#if defined(_MSC_VER)
-	const auto file_name_pos = file.find(info.name);
-	ASSERT_NE(file.npos, file_name_pos);
-	ASSERT_EQ(file.size(), file_name_pos + info.name.size());
-#else
-	// GCC does not support std::string.find(std::string_view) yet
-#endif
+	ASSERT_TRUE(EndsWith(file, info.name));
 }
 
