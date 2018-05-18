@@ -12,6 +12,8 @@
 
 using wi::detail::IoCompletionPort;
 using wi::detail::DirectoryChanges;
+using wi::detail::DirectoryChangesRange;
+using wi::detail::DirectoryChange;
 using wi::detail::WinDWORD;
 
 using namespace std::chrono_literals;
@@ -40,6 +42,7 @@ namespace
 				dir_name_.c_str(), buffer_
 				, static_cast<WinDWORD>(sizeof(buffer_))
 				, false, filters, io_port_);
+			dir_changes_->start_watch();
 		}
 
 		std::wstring create_random_file()
@@ -82,7 +85,7 @@ namespace
 
 	protected:
 		IoCompletionPort io_port_;
-		DWORD buffer_[1024];
+		DWORD buffer_[128];
 		std::unique_ptr<DirectoryChanges> dir_changes_;
 		std::wstring dir_name_;
 		std::vector<std::wstring> created_files_;
@@ -96,13 +99,18 @@ TEST_F(DirectoryChangesTest, IOPort_Receives_File_Added_Event_After_File_Creatio
 	const auto event = io_port_.wait_for(1s);
 	ASSERT_TRUE(event);
 
-	const auto& info = *reinterpret_cast<FILE_NOTIFY_INFORMATION*>(buffer_);
-	ASSERT_EQ(static_cast<DWORD>(FILE_ACTION_ADDED), info.Action);
-	const bool is_last_record = (info.NextEntryOffset == 0);
-	ASSERT_TRUE(is_last_record);
-	const auto file_name_pos = file.find(info.FileName);
+	const DirectoryChangesRange changes(buffer_);
+	const auto count = std::distance(changes.cbegin(), changes.cend());
+	ASSERT_EQ(1u, count);
+
+	const auto info = *changes.begin();
+	ASSERT_EQ(static_cast<DWORD>(FILE_ACTION_ADDED), info.action);
+#if defined(_MSC_VER)
+	const auto file_name_pos = file.find(info.name);
 	ASSERT_NE(file.npos, file_name_pos);
-	const std::size_t name_length = static_cast<std::size_t>(info.FileNameLength) / sizeof(wchar_t);
-	ASSERT_EQ(file.size(), file_name_pos + name_length);
+	ASSERT_EQ(file.size(), file_name_pos + info.name.size());
+#else
+	// GCC does not support std::string.find(std::string_view) yet
+#endif
 }
 

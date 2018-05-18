@@ -49,8 +49,6 @@ DirectoryChanges::DirectoryChanges(WinHANDLE directory, void* buffer
 	// #TODO: throw DirectoryChangesError exception with nested
 	// IoCompletionPortError if there is any
 	io_port_.associate_device(directory, dir_key_);
-
-	start_watch();
 }
 
 DirectoryChanges::DirectoryChanges(const wchar_t* directory_name
