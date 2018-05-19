@@ -30,6 +30,7 @@ namespace wi
 			// (`buffer` is DWORD-aligned, variable length array of
 			// `FILE_NOTIFY_INFORMATION` structs)
 			explicit DirectoryChangesRange(const void* buffer);
+			explicit DirectoryChangesRange();
 
 			iterator begin();
 			const_iterator begin() const;
@@ -42,7 +43,7 @@ namespace wi
 			const_iterator cend() const;
 
 		private:
-			const void* const buffer_;
+			const void* buffer_;
 		};
 
 		// Models read-only `ForwardIterator`
@@ -94,6 +95,11 @@ namespace wi
 
 		/*explicit*/ inline DirectoryChangesRange::DirectoryChangesRange(const void* buffer)
 			: buffer_(buffer)
+		{
+		}
+
+		/*explicit*/ inline DirectoryChangesRange::DirectoryChangesRange()
+			: DirectoryChangesRange(nullptr)
 		{
 		}
 

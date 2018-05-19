@@ -1,5 +1,6 @@
 #include <win_io/detail/read_directory_changes.h>
-#include <win_io/detail/read_directory_changes_errors.h>
+
+#include <chrono>
 
 #include <cassert>
 
@@ -79,9 +80,14 @@ WinHANDLE DirectoryChanges::open_directory(const wchar_t* directory_name)
 	return handle;
 }
 
-WinHANDLE DirectoryChanges::directory() const
+WinHANDLE DirectoryChanges::directory_handle() const
 {
 	return directory_;
+}
+
+const void* DirectoryChanges::overlapped() const
+{
+	return &ov_buffer_;
 }
 
 DirectoryChanges::~DirectoryChanges()
@@ -94,14 +100,65 @@ DirectoryChanges::~DirectoryChanges()
 	}
 }
 
-void DirectoryChanges::start_watch()
+void DirectoryChanges::start_watch(std::error_code& ec)
 {
+	ec = std::error_code();
 	// See ::ReadDirectoryChangesExW(): starting from Windows 10
 	const BOOL status = ::ReadDirectoryChangesW(directory_
 		, buffer_, length_, watch_sub_tree_, notify_filter_
 		, nullptr, &GetOverlapped(ov_buffer_), nullptr);
 	if (!status)
 	{
-		throw_last_error<DirectoryChangesError>("[Dc] ::ReadDirectoryChangesW()");
+		ec = make_last_error_code();
 	}
+}
+
+void DirectoryChanges::start_watch()
+{
+	std::error_code ec;
+	start_watch(ec);
+	throw_if_error<DirectoryChangesError>("[Dc] ::ReadDirectoryChangesW()", ec);
+}
+
+DirectoryChangesWait DirectoryChanges::wait_impl(
+	WinDWORD milliseconds, std::error_code& ec)
+{
+	const auto data = io_port_.wait_for(std::chrono::milliseconds(milliseconds), ec);
+	if (!data)
+	{
+		return DirectoryChangesWait();
+	}
+	// Check if data is coming from our directory, since we do not
+	// own I/O Completion Port and it can be used for other purpose
+	if ((data->key != dir_key_) || (data->ptr != &ov_buffer_))
+	{
+		return *data;
+	}
+	return DirectoryChangesRange(buffer_);
+}
+
+DirectoryChangesWait DirectoryChanges::get(std::error_code& ec)
+{
+	return wait_impl(INFINITE, ec);
+}
+
+DirectoryChangesWait DirectoryChanges::get()
+{
+	std::error_code ec;
+	auto data = get(ec);
+	throw_if_error<DirectoryChangesError>("[Dc] failed to wait for data", ec);
+	return data;
+}
+
+DirectoryChangesWait DirectoryChanges::query(std::error_code& ec)
+{
+	return wait_impl(0, ec);
+}
+
+DirectoryChangesWait DirectoryChanges::query()
+{
+	std::error_code ec;
+	auto data = query(ec);
+	throw_if_error<DirectoryChangesError>("[Dc] failed to wait for data", ec);
+	return data;
 }
