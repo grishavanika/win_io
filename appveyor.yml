@@ -3,7 +3,8 @@ image: Visual Studio 2017
 
 environment:
   matrix:
-    - compiler: clang
+	# TODO: Clang 6.0.0 does not support string_view
+    #- compiler: clang
     - compiler: cl
     - compiler: gcc
 
