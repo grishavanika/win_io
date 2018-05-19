@@ -2,17 +2,7 @@
 #include <win_io/errors.h>
 #include <win_io/detail/io_completion_port_data.h>
 
-#if (__has_include(<optional>))
-#  include <optional>
-#else
-#  include <experimental/optional>
-namespace std
-{
-	template<typename T>
-	using optional = experimental::optional<T>;
-	constexpr auto nullopt = experimental::nullopt;
-} // namespace std
-#endif
+#include <optional>
 
 namespace wi
 {

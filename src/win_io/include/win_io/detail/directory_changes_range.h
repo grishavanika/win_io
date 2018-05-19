@@ -1,17 +1,8 @@
 #pragma once
 #include <win_io/detail/win_types.h>
 
-#if (__has_include(<string_view>))
-#  include <string_view>
-#else
-#  include <experimental/string_view>
-namespace std
-{
-	using wstring_view = experimental::wstring_view;
-} // namespace std
-#endif
-
 #include <iterator>
+#include <string_view>
 
 namespace wi
 {

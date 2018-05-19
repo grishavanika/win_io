@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 #include <win_io/detail/read_directory_changes.h>
 
-#include <Windows.h>
+#include "file_utils.h"
 
 #include <memory>
 #include <string>
@@ -47,31 +47,15 @@ namespace
 
 		std::wstring create_random_file()
 		{
-#if (_MSC_VER)
-			const std::wstring name = dir_name_ + L"/" + L"test.bin";
-			std::ofstream file(name);
-			file.close();
+			const std::wstring name = utils::CreateTemporaryFile(dir_name_);
 			created_files_.push_back(name);
-			return std::wstring(name);
-#else
-			[&]
-			{
-				ASSERT_FALSE(true) << "Create file for GCC is not implemented yet";
-			}();
-			return std::wstring();
-#endif
+			return name;
 		}
 
 	private:
 		std::wstring make_temporary_dir()
 		{
-			const wchar_t* name = L"temp";
-			[&]
-			{
-				ASSERT_TRUE(::CreateDirectoryW(name, nullptr))
-					<< "Failed to create directory: " << ::GetLastError();
-			}();
-			return std::wstring(name);
+			return utils::CreateTemporaryDir();
 		}
 
 		void remove_temporary_dir()
@@ -93,17 +77,12 @@ namespace
 
 	bool EndsWith(const std::wstring& str, const std::wstring_view& end)
 	{
-#if defined(_MSC_VER)
 		const auto pos = str.rfind(end);
 		if (pos == str.npos)
 		{
 			return false;
 		}
 		return (str.size() == (pos + end.size()));
-#else
-		// GCC does not support std::string.find(std::string_view) yet
-		return false;
-#endif
 	}
 
 } // namespace
@@ -112,7 +91,7 @@ TEST_F(DirectoryChangesTest, IOPort_Receives_File_Added_Event_After_File_Creatio
 {
 	start_with_filters(FILE_NOTIFY_CHANGE_FILE_NAME);
 	const auto file = create_random_file();
-	const auto event = io_port_.wait_for(1s);
+	const auto event = io_port_.wait_for(10ms);
 	ASSERT_TRUE(event);
 
 	const DirectoryChangesRange changes(buffer_);

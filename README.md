@@ -5,7 +5,12 @@
 
 # Use-cases
 
-- Directory changes (`::ReadDirectoryChangesW()` [1])
+- Directory changes ([::ReadDirectoryChangesW()] wrapper)
 
-[1]: https://msdn.microsoft.com/en-us/library/windows/desktop/aa365465(v=vs.85).aspx
+[::ReadDirectoryChangesW()]: https://msdn.microsoft.com/en-us/library/windows/desktop/aa365465(v=vs.85).aspx
 
+# Tested/supported compilers
+
+Library C++17 `string_view` and `optional` is in use.
+
+Tested on Windows with GCC 7.3.0, MSVC 2017, Clang 7.0.0

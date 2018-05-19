@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 #include <win_io/detail/io_completion_port.h>
 
-#include <Windows.h>
+#include "file_utils.h"
 
 #include <cstdio>
 
@@ -17,22 +17,12 @@ namespace
 	protected:
 		virtual void SetUp() override
 		{
-#if (_MSC_VER)
-			char temp_name[L_tmpnam_s]{};
-			const errno_t ec = tmpnam_s(temp_name);
-			ASSERT_EQ(0, ec)
-				<< "Failed to generate temp file name: " << ec;
-#else
-			const char* temp_name = std::tmpnam(nullptr);
-			ASSERT_NE(nullptr, temp_name)
-				<< "Failed to generate temp file name";
-#endif
-				
-			file_ = ::CreateFileA(temp_name
+			const std::wstring temp_name = utils::CreateTemporaryFile();
+			file_ = ::CreateFileW(temp_name.c_str()
 				, GENERIC_WRITE
 				, FILE_SHARE_READ
 				, nullptr
-				, CREATE_NEW
+				, OPEN_EXISTING
 				, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED | FILE_FLAG_DELETE_ON_CLOSE
 				, nullptr);
 			ASSERT_NE(INVALID_HANDLE_VALUE, file_)
