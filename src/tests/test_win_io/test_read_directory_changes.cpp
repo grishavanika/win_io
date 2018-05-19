@@ -14,14 +14,7 @@
 #include <cstdio>
 #include <cstring>
 
-using wi::detail::IoCompletionPort;
-using wi::detail::DirectoryChanges;
-using wi::detail::DirectoryChangesRange;
-using wi::detail::DirectoryChangesIterator;
-using wi::detail::DirectoryChange;
-using wi::detail::PortData;
-using wi::detail::WinDWORD;
-using wi::detail::WinULONG_PTR;
+using namespace wi::detail;
 
 using namespace std::chrono_literals;
 

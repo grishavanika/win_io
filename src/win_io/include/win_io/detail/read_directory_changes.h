@@ -9,6 +9,7 @@ namespace wi
 {
 	namespace detail
 	{
+		// #TODO: make nice struct with properly names check/query methods
 		using DirectoryChangesWait = std::variant<DirectoryChangesRange, PortData>;
 
 		// Low-level wrapper around `::ReadDirectoryChangesW()`
@@ -29,7 +30,16 @@ namespace wi
 			~DirectoryChanges();
 
 			WinHANDLE directory_handle() const;
-			const void* overlapped() const;
+
+			// Usefull when single I/O completion port is used for
+			// tracking multiple directories changes.
+			// You will need to wait for I/O event and then check
+			// from which directory it coming.
+			// Once you will need to process data,
+			// it's possible to construct `DirectoryChangesRange` from `buffer()`
+			bool is_directory_change(const PortData& data) const;
+
+			const void* buffer() const;
 
 			// Call after each successfull wait for event
 			// (or after `DirectoryChanges` instance creation).
@@ -54,8 +64,8 @@ namespace wi
 
 		private:
 			WinHANDLE open_directory(const wchar_t* directory_name);
-			DirectoryChangesWait wait_impl(
-				WinDWORD milliseconds, std::error_code& ec);
+			DirectoryChangesWait wait_impl(WinDWORD milliseconds
+				, std::error_code& ec);
 
 		private:
 			IoCompletionPort& io_port_;

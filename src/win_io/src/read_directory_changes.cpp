@@ -85,9 +85,9 @@ WinHANDLE DirectoryChanges::directory_handle() const
 	return directory_;
 }
 
-const void* DirectoryChanges::overlapped() const
+const void* DirectoryChanges::buffer() const
 {
-	return &ov_buffer_;
+	return buffer_;
 }
 
 DirectoryChanges::~DirectoryChanges()
@@ -120,6 +120,11 @@ void DirectoryChanges::start_watch()
 	throw_if_error<DirectoryChangesError>("[Dc] ::ReadDirectoryChangesW()", ec);
 }
 
+bool DirectoryChanges::is_directory_change(const PortData& data) const
+{
+	return (data.key == dir_key_) && (data.ptr == &ov_buffer_);
+}
+
 DirectoryChangesWait DirectoryChanges::wait_impl(
 	WinDWORD milliseconds, std::error_code& ec)
 {
@@ -130,7 +135,7 @@ DirectoryChangesWait DirectoryChanges::wait_impl(
 	}
 	// Check if data is coming from our directory, since we do not
 	// own I/O Completion Port and it can be used for other purpose
-	if ((data->key != dir_key_) || (data->ptr != &ov_buffer_))
+	if (!is_directory_change(*data))
 	{
 		return *data;
 	}
