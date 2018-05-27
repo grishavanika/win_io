@@ -34,23 +34,23 @@ struct FlagMeta
 
 const FlagMeta k_notify_filters[] =
 {
-	{FILE_NOTIFY_CHANGE_FILE_NAME,	L"f", L"File name change (renaming, creating, or deleting a file)"},
-	{FILE_NOTIFY_CHANGE_DIR_NAME,	L"d", L"Directory name change (creating or deleting a directory)"},
-	{FILE_NOTIFY_CHANGE_ATTRIBUTES, L"a", L"Attribute change"},
-	{FILE_NOTIFY_CHANGE_SIZE,		L"s", L"File size change"},
-	{FILE_NOTIFY_CHANGE_LAST_WRITE, L"w", L"Last write time change of files"},
-	{FILE_NOTIFY_CHANGE_LAST_ACCESS,L"t", L"Last access time change of files"},
-	{FILE_NOTIFY_CHANGE_CREATION,	L"c", L"Creation time change of files"},
-	{FILE_NOTIFY_CHANGE_SECURITY,	L"s", L"Security descriptor change"},
+	{FILE_NOTIFY_CHANGE_FILE_NAME,   L"f", L"File name change (renaming, creating, or deleting a file)"},
+	{FILE_NOTIFY_CHANGE_DIR_NAME,    L"d", L"Directory name change (creating or deleting a directory)"},
+	{FILE_NOTIFY_CHANGE_ATTRIBUTES,  L"a", L"Attribute change"},
+	{FILE_NOTIFY_CHANGE_SIZE,        L"s", L"File size change"},
+	{FILE_NOTIFY_CHANGE_LAST_WRITE,  L"w", L"Last write time change of files"},
+	{FILE_NOTIFY_CHANGE_LAST_ACCESS, L"t", L"Last access time change of files"},
+	{FILE_NOTIFY_CHANGE_CREATION,    L"c", L"Creation time change of files"},
+	{FILE_NOTIFY_CHANGE_SECURITY,    L"s", L"Security descriptor change"},
 };
 
 const FlagMeta k_actions[] =
 {
-	{FILE_ACTION_ADDED,				L"a", L"File was added to the directory"},
-	{FILE_ACTION_REMOVED,			L"r", L"File was removed from the directory"},
-	{FILE_ACTION_MODIFIED,			L"m", L"File was modified (time stamp or attributes)"},
-	{FILE_ACTION_RENAMED_OLD_NAME,	L"o", L"File was renamed and this is the old name"},
-	{FILE_ACTION_RENAMED_NEW_NAME,	L"n", L"File was renamed and this is the new name"},
+	{FILE_ACTION_ADDED,             L"a", L"File was added to the directory"},
+	{FILE_ACTION_REMOVED,           L"r", L"File was removed from the directory"},
+	{FILE_ACTION_MODIFIED,          L"m", L"File was modified (time stamp or attributes)"},
+	{FILE_ACTION_RENAMED_OLD_NAME,  L"o", L"File was renamed and this is the old name"},
+	{FILE_ACTION_RENAMED_NEW_NAME,  L"n", L"File was renamed and this is the new name"},
 };
 
 wchar_t GetFlagsStartChar()
@@ -89,9 +89,9 @@ const struct
 	const wchar_t* const description;
 } k_args[] =
 {
-	{GetRecursiveOption(),	L"Recursive directory watch (watch with subtree)"},
-	{GetVerboseOption(),	L"Verbose output to stderr (errors + options)"},
-	{GetHelpOption(),		L"Print help and exit"},
+	{GetRecursiveOption(), L"Recursive directory watch (watch with subtree)"},
+	{GetVerboseOption(),   L"Verbose output to stderr (errors + options)"},
+	{GetHelpOption(),      L"Print help and exit"},
 };
 
 std::wstring_view GetActionArg(DWORD action_id)
@@ -203,10 +203,10 @@ void PrettyPrintHelp(std::wstring_view exe_path)
 	LogStreamW() << L"Possible output:" << L"\n";
 	const DirectoryChange changes[] =
 	{
-		{FILE_ACTION_ADDED,				L"new_file.txt"},
-		{FILE_ACTION_RENAMED_OLD_NAME,	L"file_with_old_name.txt"},
-		{FILE_ACTION_REMOVED,			L"file_was_removed.txt"},
-		{FILE_ACTION_RENAMED_NEW_NAME,	L"file_with_new_name.txt"},
+		{FILE_ACTION_ADDED,             L"new_file.txt"},
+		{FILE_ACTION_RENAMED_OLD_NAME,  L"file_with_old_name.txt"},
+		{FILE_ACTION_REMOVED,           L"file_was_removed.txt"},
+		{FILE_ACTION_RENAMED_NEW_NAME,  L"file_with_new_name.txt"},
 	};
 
 	for (const auto& change : changes)
