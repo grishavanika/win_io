@@ -9,11 +9,46 @@ namespace wi
 {
 	namespace detail
 	{
-		// #TODO: make nice struct with properly names check/query methods
-		using DirectoryChangesWait = std::variant<DirectoryChangesRange, PortData>;
+		// `DirectoryChanges` helper is thin adapter around `IoCompletionPort`
+		// that does not own the port. As a result, waiting for directory change
+		// can lead to getting some other-not-directory-relative 
+		// IoCompletionPort's data since clients of the port can use it in
+		// multiple ways (posting custom data, waiting for other changes and so on).
+		// Hence, it's a client responsibility to handle wait results.
+		// 
+		// DirectoryChangesResults results = dir_changes.get();
+		// if (results.directory_changes()) { /*process directory changes*/ }
+		// else if (results.port_changes()) { /*some other PortData */ }
+		class DirectoryChangesResults
+		{
+		public:
+			explicit DirectoryChangesResults();
+			explicit DirectoryChangesResults(DirectoryChangesRange dir_changes);
+			explicit DirectoryChangesResults(PortData port_changes);
+
+			bool has_changes() const;
+
+			DirectoryChangesRange* directory_changes();
+			const DirectoryChangesRange* directory_changes() const;
+			
+			PortData* port_changes();
+			const PortData* port_changes() const;
+
+		private:
+			std::variant<DirectoryChangesRange, PortData> data_;
+		};
 
 		// Low-level wrapper around `::ReadDirectoryChangesW()`
-		// with IOCompletionPort usage
+		// with IOCompletionPort usage.
+		// Wait on the data can be done from multiple threads.
+		// General use case can look like:
+		// 
+		// dir_changes_.start_watch();
+		// while (is_waiting()) {
+		//		DirectoryChangesResults results = dir_changes.get();
+		//		process_changes(results);
+		//		dir_changes_.start_watch();
+		// }
 		class DirectoryChanges
 		{
 		public:
@@ -49,22 +84,22 @@ namespace wi
 			void start_watch(std::error_code& ec);
 			void start_watch();
 
-			DirectoryChangesWait get(std::error_code& ec);
-			DirectoryChangesWait get();
+			DirectoryChangesResults get(std::error_code& ec);
+			DirectoryChangesResults get();
 
-			DirectoryChangesWait query(std::error_code& ec);
-			DirectoryChangesWait query();
+			DirectoryChangesResults query(std::error_code& ec);
+			DirectoryChangesResults query();
 			
 			template<typename Rep, typename Period>
-			DirectoryChangesWait wait_for(std::chrono::duration<Rep, Period> time
+			DirectoryChangesResults wait_for(std::chrono::duration<Rep, Period> time
 				, std::error_code& ec);
 
 			template<typename Rep, typename Period>
-			DirectoryChangesWait wait_for(std::chrono::duration<Rep, Period> time);
+			DirectoryChangesResults wait_for(std::chrono::duration<Rep, Period> time);
 
 		private:
 			WinHANDLE open_directory(const wchar_t* directory_name);
-			DirectoryChangesWait wait_impl(WinDWORD milliseconds
+			DirectoryChangesResults wait_impl(WinDWORD milliseconds
 				, std::error_code& ec);
 
 		private:
@@ -88,7 +123,7 @@ namespace wi
 	{
 
 		template<typename Rep, typename Period>
-		DirectoryChangesWait DirectoryChanges::wait_for(
+		DirectoryChangesResults DirectoryChanges::wait_for(
 			std::chrono::duration<Rep, Period> time, std::error_code& ec)
 		{
 			const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(time);
@@ -96,13 +131,53 @@ namespace wi
 		}
 
 		template<typename Rep, typename Period>
-		DirectoryChangesWait DirectoryChanges::wait_for(
+		DirectoryChangesResults DirectoryChanges::wait_for(
 			std::chrono::duration<Rep, Period> time)
 		{
 			std::error_code ec;
 			auto data = wait_for(std::move(time), ec);
 			throw_if_error<DirectoryChangesError>("[Dc] failed to wait for data", ec);
 			return data;
+		}
+
+		inline DirectoryChangesResults::DirectoryChangesResults()
+			: data_()
+		{
+		}
+
+		inline DirectoryChangesResults::DirectoryChangesResults(DirectoryChangesRange dir_changes)
+			: data_(std::move(dir_changes))
+		{
+		}
+
+		inline DirectoryChangesResults::DirectoryChangesResults(PortData port_changes)
+			: data_(std::move(port_changes))
+		{
+		}
+
+		inline bool DirectoryChangesResults::has_changes() const
+		{
+			return (data_.index() != std::variant_npos);
+		}
+
+		inline DirectoryChangesRange* DirectoryChangesResults::directory_changes()
+		{
+			return std::get_if<DirectoryChangesRange>(&data_);
+		}
+
+		inline const DirectoryChangesRange* DirectoryChangesResults::directory_changes() const
+		{
+			return std::get_if<DirectoryChangesRange>(&data_);
+		}
+
+		inline PortData* DirectoryChangesResults::port_changes()
+		{
+			return std::get_if<PortData>(&data_);
+		}
+
+		inline const PortData* DirectoryChangesResults::port_changes() const
+		{
+			return std::get_if<PortData>(&data_);
 		}
 
 	} // namespace detail

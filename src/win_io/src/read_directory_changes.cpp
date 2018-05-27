@@ -125,29 +125,29 @@ bool DirectoryChanges::is_directory_change(const PortData& data) const
 	return (data.key == dir_key_) && (data.ptr == &ov_buffer_);
 }
 
-DirectoryChangesWait DirectoryChanges::wait_impl(
+DirectoryChangesResults DirectoryChanges::wait_impl(
 	WinDWORD milliseconds, std::error_code& ec)
 {
 	const auto data = io_port_.wait_for(std::chrono::milliseconds(milliseconds), ec);
 	if (!data)
 	{
-		return DirectoryChangesWait();
+		return DirectoryChangesResults();
 	}
 	// Check if data is coming from our directory, since we do not
 	// own I/O Completion Port and it can be used for other purpose
 	if (!is_directory_change(*data))
 	{
-		return *data;
+		return DirectoryChangesResults(std::move(*data));
 	}
-	return DirectoryChangesRange(buffer_);
+	return DirectoryChangesResults(DirectoryChangesRange(buffer_));
 }
 
-DirectoryChangesWait DirectoryChanges::get(std::error_code& ec)
+DirectoryChangesResults DirectoryChanges::get(std::error_code& ec)
 {
 	return wait_impl(INFINITE, ec);
 }
 
-DirectoryChangesWait DirectoryChanges::get()
+DirectoryChangesResults DirectoryChanges::get()
 {
 	std::error_code ec;
 	auto data = get(ec);
@@ -155,12 +155,12 @@ DirectoryChangesWait DirectoryChanges::get()
 	return data;
 }
 
-DirectoryChangesWait DirectoryChanges::query(std::error_code& ec)
+DirectoryChangesResults DirectoryChanges::query(std::error_code& ec)
 {
 	return wait_impl(0, ec);
 }
 
-DirectoryChangesWait DirectoryChanges::query()
+DirectoryChangesResults DirectoryChanges::query()
 {
 	std::error_code ec;
 	auto data = query(ec);

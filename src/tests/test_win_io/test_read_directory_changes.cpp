@@ -106,8 +106,8 @@ TEST_F(DirectoryChangesTest, IOPort_Receives_File_Added_Event_After_File_Creatio
 {
 	start_with_filters(FILE_NOTIFY_CHANGE_FILE_NAME);
 	const auto file = create_random_file();
-	const auto data = dir_changes_->wait_for(10ms);
-	const auto changes = std::get_if<DirectoryChangesRange>(&data);
+	const auto results = dir_changes_->wait_for(10ms);
+	const auto changes = results.directory_changes();
 	ASSERT_TRUE(changes);
 
 	const auto count = std::distance(changes->cbegin(), changes->cend());
@@ -124,10 +124,10 @@ TEST_F(DirectoryChangesTest, Wait_On_Dir_Change_Can_Return_Other_Port_Data)
 
 	io_port_.post(PortData(10, 1, nullptr));
 	std::error_code ec;
-	auto changes_or_data = dir_changes_->wait_for(10ms, ec);
+	auto results = dir_changes_->wait_for(10ms, ec);
 	ASSERT_FALSE(ec);
 	// Wait resulted to getting PortData
-	const auto port_data = std::get_if<PortData>(&changes_or_data);
+	const auto port_data = results.port_changes();
 	ASSERT_TRUE(port_data);
 	ASSERT_EQ(WinDWORD(10), port_data->value);
 	ASSERT_EQ(WinULONG_PTR(1), port_data->key);
@@ -135,8 +135,8 @@ TEST_F(DirectoryChangesTest, Wait_On_Dir_Change_Can_Return_Other_Port_Data)
 
 	// Now, create & handle directory event
 	const auto file = create_random_file();
-	changes_or_data = dir_changes_->wait_for(10ms);
-	const auto changes = std::get_if<DirectoryChangesRange>(&changes_or_data);
+	results = dir_changes_->wait_for(10ms);
+	const auto changes = results.directory_changes();
 	ASSERT_TRUE(changes);
 
 	const auto count = std::distance(changes->cbegin(), changes->cend());
@@ -153,8 +153,8 @@ TEST_F(DirectoryChangesTest, Start_Needs_To_Be_Called_After_Successfull_Wait)
 	const auto file = create_random_file();
 
 	{
-		auto changes_or_data = dir_changes_->query();
-		const auto changes = std::get_if<DirectoryChangesRange>(&changes_or_data);
+		auto results = dir_changes_->query();
+		const auto changes = results.directory_changes();
 		ASSERT_TRUE(changes);
 		const auto count = std::distance(changes->cbegin(), changes->cend());
 		ASSERT_EQ(1u, count);
@@ -172,8 +172,8 @@ TEST_F(DirectoryChangesTest, Start_Needs_To_Be_Called_After_Successfull_Wait)
 	delete_file(file);
 
 	{
-		auto changes_or_data = dir_changes_->query();
-		const auto changes = std::get_if<DirectoryChangesRange>(&changes_or_data);
+		auto results = dir_changes_->query();
+		const auto changes = results.directory_changes();
 		ASSERT_TRUE(changes);
 		const auto count = std::distance(changes->cbegin(), changes->cend());
 		ASSERT_EQ(1u, count);
@@ -242,13 +242,13 @@ TEST_F(DirectoryChangesTest, Waiting_From_Multiple_Threads)
 		std::error_code ec;
 		while (running)
 		{
-			auto changes_or_data = dir_changes_->wait_for(10ms, ec);
+			auto results = dir_changes_->wait_for(10ms, ec);
 			if (ec)
 			{
 				continue;
 			}
 
-			const auto changes = std::get_if<DirectoryChangesRange>(&changes_or_data);
+			const auto changes = results.directory_changes();
 			ASSERT_TRUE(changes);
 			{
 				std::lock_guard<std::mutex> _(lock);
