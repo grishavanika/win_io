@@ -10,20 +10,23 @@ macro(set_cpp17_standard)
 	if (clang_on_msvc)
 		set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++1z /std:c++17")
 	endif()
-
 endmacro()
 
 macro(detect_compilers)
 	set(clang_on_msvc OFF)
 	set(clang OFF)
 	set(only_msvc ${MSVC})
-	set(gcc ${GNU})
+	if (CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+		set(gcc ON)
+	endif()
 
 	if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 		set(clang ON)
 		set(clang_on_msvc ${MSVC})
 		set(only_msvc OFF)
 	endif()
+
+	cmake_print_variables(clang_on_msvc clang only_msvc gcc)
 endmacro()
 
 macro(set_all_warnings target visibility)
