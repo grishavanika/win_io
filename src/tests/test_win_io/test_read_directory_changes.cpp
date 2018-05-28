@@ -3,6 +3,8 @@
 
 #include "file_utils.h"
 
+#include <nonstd/string_view.hpp>
+
 #include <memory>
 #include <string>
 #include <algorithm>
@@ -90,9 +92,15 @@ namespace
 		std::vector<std::wstring> created_files_;
 	};
 
-	bool EndsWith(const std::wstring& str, const std::wstring_view& end)
+	bool EndsWith(const std::wstring& str, const nonstd::wstring_view& end)
 	{
+#if (1)
+		// Wrapping `str` into `wstring_view` since std version
+		// of wstring knows nothing about non-standard view
+		const auto pos = nonstd::wstring_view(str).rfind(end);
+#else
 		const auto pos = str.rfind(end);
+#endif
 		if (pos == str.npos)
 		{
 			return false;

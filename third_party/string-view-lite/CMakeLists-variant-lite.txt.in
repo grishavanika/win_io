@@ -1,0 +1,15 @@
+cmake_minimum_required(VERSION 2.8.2)
+
+project(string-view-lite-download NONE)
+
+include(ExternalProject)
+ExternalProject_Add(string-view-lite
+  GIT_REPOSITORY    https://github.com/martinmoene/string-view-lite.git
+  GIT_TAG           master
+  SOURCE_DIR        "${CMAKE_BINARY_DIR}/string-view-lite-src"
+  BINARY_DIR        ""
+  CONFIGURE_COMMAND ""
+  BUILD_COMMAND     ""
+  INSTALL_COMMAND   ""
+  TEST_COMMAND      ""
+)

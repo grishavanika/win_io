@@ -16,3 +16,6 @@ target_include_directories(${lib_name} PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
 
 target_include_directories(${lib_name} PUBLIC include)
 
+target_link_libraries(${lib_name} PUBLIC optional-lite)
+target_link_libraries(${lib_name} PUBLIC variant-lite)
+target_link_libraries(${lib_name} PUBLIC string-view-lite)

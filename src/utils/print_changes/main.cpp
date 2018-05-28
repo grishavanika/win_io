@@ -1,7 +1,7 @@
 #include <win_io/detail/read_directory_changes.h>
 
 #include <string>
-#include <string_view>
+#include <nonstd/string_view.hpp>
 #include <iostream>
 #include <exception>
 
@@ -94,7 +94,7 @@ const struct
 	{GetHelpOption(),      L"Print help and exit"},
 };
 
-std::wstring_view GetActionArg(DWORD action_id)
+nonstd::wstring_view GetActionArg(DWORD action_id)
 {
 	for (const auto& action : k_actions)
 	{
@@ -107,11 +107,12 @@ std::wstring_view GetActionArg(DWORD action_id)
 	throw PrintChangesError("Unknown action: " + std::to_string(action_id));
 }
 
-DWORD GetFilterFromString(std::wstring_view str)
+DWORD GetFilterFromString(nonstd::wstring_view str)
 {
 	for (const auto& filter : k_notify_filters)
 	{
-		if (str == filter.arg)
+		// nonstd::string_view operator==() for const char* is missing
+		if (str.compare(filter.arg) == 0)
 		{
 			return filter.flag;
 		}
@@ -120,7 +121,7 @@ DWORD GetFilterFromString(std::wstring_view str)
 	throw PrintChangesError("Invalid filter string");
 }
 
-std::wstring_view GetFileNameOnly(std::wstring_view exe_path)
+nonstd::wstring_view GetFileNameOnly(nonstd::wstring_view exe_path)
 {
 	const auto pos = exe_path.find_last_of(L"\\/");
 	if (pos == exe_path.npos)
@@ -136,7 +137,7 @@ void PrettyPrintDirectoryChange(const DirectoryChange& change)
 		<< L" " << change.name << L"\n";
 }
 
-void PrettyPrintOptions(std::wstring_view exe_path, const Options& options)
+void PrettyPrintOptions(nonstd::wstring_view exe_path, const Options& options)
 {
 	LogStreamW() << GetFileNameOnly(exe_path) << L" ";
 	LogStreamW() << options.directory << L" ";
@@ -164,7 +165,7 @@ void PrettyPrintOptions(std::wstring_view exe_path, const Options& options)
 	LogStreamW() << L"\n";
 }
 
-void PrettyPrintHelp(std::wstring_view exe_path)
+void PrettyPrintHelp(nonstd::wstring_view exe_path)
 {
 	LogStreamW() << L"Help:" << "\n";
 	LogStreamW() << GetFileNameOnly(exe_path) << L" ";
@@ -226,7 +227,7 @@ Options ParseOptions(int argc, wchar_t* argv[])
 	}
 	Options options;
 	options.directory = argv[1];
-	const std::wstring_view flags = argv[2];
+	const nonstd::wstring_view flags = argv[2];
 	if ((flags.size() < 1) || (flags.front() != GetFlagsStartChar()))
 	{
 		// #TODO: convert wstring to string and add useful context to error message
@@ -236,16 +237,16 @@ Options ParseOptions(int argc, wchar_t* argv[])
 	bool enable_all_filters = true;
 	for (auto filter_char : flags.substr(1))
 	{
-		const std::wstring_view filter_str(&filter_char, 1);
-		if (filter_str == GetRecursiveOption())
+		const nonstd::wstring_view filter_str(&filter_char, 1);
+		if (filter_str.compare(GetRecursiveOption()) == 0)
 		{
 			options.watch_sub_tree = true;
 		}
-		else if (filter_str == GetVerboseOption())
+		else if (filter_str.compare(GetVerboseOption()) == 0)
 		{
 			options.verbose = true;
 		}
-		else if (filter_str == GetHelpOption())
+		else if (filter_str.compare(GetHelpOption()) == 0)
 		{
 			options.print_help = true;
 		}
@@ -351,7 +352,7 @@ int wmain(int argc, wchar_t* argv[])
 	// C streams are not used, no need to synchronize
 	std::ios::sync_with_stdio(false);
 
-	std::wstring_view exe_path = argv[0];
+	nonstd::wstring_view exe_path = argv[0];
 	if (argc == 1)
 	{
 		PrettyPrintHelp(exe_path);

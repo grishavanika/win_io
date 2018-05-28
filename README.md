@@ -11,9 +11,21 @@
 
 # Tested/supported compilers
 
-C++17 library `string_view`, `optional`, `std::variant` is in use.
+- GCC 7.3.0, 7.2.0
+- MSVC 2017
+- Clang 7.0.0 with MSVC 2017
 
-Tested with GCC 7.3.0, MSVC 2017, Clang 7.0.0
+Should work with any C++11 compiler
+
+# Dependencies
+
+C++17 library `string_view`, `optional`, `std::variant` types are in use.
+
+They are replaced with back-ported versions from Martin Moene:
+
+- optional-lite: https://github.com/martinmoene/optional-lite
+- variant-lite: https://github.com/martinmoene/variant-lite
+- string-view-lite: https://github.com/martinmoene/string-view-lite
 
 # Examples
 

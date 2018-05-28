@@ -31,18 +31,18 @@ namespace wi
 			// See https://xania.org/200807/iocp article for possible
 			// combination of results from the call to ::GetQueuedCompletionStatus().
 			// Also, check original documentation
-			std::optional<PortData> get(std::error_code& ec);
+			nonstd::optional<PortData> get(std::error_code& ec);
 			PortData get();
 
-			std::optional<PortData> query(std::error_code& ec);
-			std::optional<PortData> query();
+			nonstd::optional<PortData> query(std::error_code& ec);
+			nonstd::optional<PortData> query();
 
 			template<typename Rep, typename Period>
-			std::optional<PortData> wait_for(std::chrono::duration<Rep, Period> time
+			nonstd::optional<PortData> wait_for(std::chrono::duration<Rep, Period> time
 				, std::error_code& ec);
 
 			template<typename Rep, typename Period>
-			std::optional<PortData> wait_for(std::chrono::duration<Rep, Period> time);
+			nonstd::optional<PortData> wait_for(std::chrono::duration<Rep, Period> time);
 
 			void associate_device(WinHANDLE device, WinULONG_PTR key
 				, std::error_code& ec);
@@ -55,7 +55,7 @@ namespace wi
 			WinHANDLE native_handle();
 
 		private:
-			std::optional<PortData> wait_impl(WinDWORD milliseconds, std::error_code& ec);
+			nonstd::optional<PortData> wait_impl(WinDWORD milliseconds, std::error_code& ec);
 			void associate_with_impl(WinHANDLE device, WinULONG_PTR key
 				, std::error_code& ec);
 			void associate_with_impl(WinHANDLE device, WinULONG_PTR key);
@@ -73,7 +73,7 @@ namespace wi
 	{
 
 		template<typename Rep, typename Period>
-		std::optional<PortData> IoCompletionPort::wait_for(
+		nonstd::optional<PortData> IoCompletionPort::wait_for(
 			std::chrono::duration<Rep, Period> time, std::error_code& ec)
 		{
 			const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(time);
@@ -81,7 +81,7 @@ namespace wi
 		}
 
 		template<typename Rep, typename Period>
-		std::optional<PortData> IoCompletionPort::wait_for(std::chrono::duration<Rep, Period> time)
+		nonstd::optional<PortData> IoCompletionPort::wait_for(std::chrono::duration<Rep, Period> time)
 		{
 			std::error_code ec;
 			auto data = wait_for(std::move(time), ec);

@@ -3,6 +3,8 @@
 
 #include "file_utils.h"
 
+#include <nonstd/optional.hpp>
+
 #include <cstdio>
 
 using wi::detail::IoCompletionPort;
@@ -66,13 +68,13 @@ TEST(IoCompletionPort, Has_No_Data_Until_Post)
 	std::error_code ec;
 	auto receive_data = port.query(ec);
 	ASSERT_TRUE(ec);
-	ASSERT_EQ(std::nullopt, receive_data);
+	ASSERT_EQ(nonstd::nullopt, receive_data);
 	
 	const PortData send_data(1, 1, nullptr);
 	port.post(send_data);
 	receive_data = port.query(ec);
 	ASSERT_FALSE(ec);
-	ASSERT_NE(std::nullopt, receive_data);
+	ASSERT_NE(nonstd::nullopt, receive_data);
 	ASSERT_EQ(send_data, *receive_data);
 }
 
@@ -82,13 +84,13 @@ TEST(IoCompletionPort, Wait_Fails_Until_Post)
 	std::error_code ec;
 	auto receive_data = port.wait_for(20ms, ec);
 	ASSERT_TRUE(ec);
-	ASSERT_EQ(std::nullopt, receive_data);
+	ASSERT_EQ(nonstd::nullopt, receive_data);
 
 	const PortData send_data(1, 1, nullptr);
 	port.post(send_data);
 	receive_data = port.wait_for(20ms, ec);
 	ASSERT_FALSE(ec);
-	ASSERT_NE(std::nullopt, receive_data);
+	ASSERT_NE(nonstd::nullopt, receive_data);
 	ASSERT_EQ(send_data, *receive_data);
 }
 

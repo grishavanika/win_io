@@ -31,7 +31,7 @@ IoCompletionPort::IoCompletionPort(std::uint32_t concurrent_threads_hint)
 
 IoCompletionPort::~IoCompletionPort()
 {
-	const bool ok = ::CloseHandle(io_port_);
+	const bool ok = !!::CloseHandle(io_port_);
 	assert(ok && "[Io] ::CloseHandle() on IoCompletionPort failed");
 	(void)ok;
 }
@@ -54,7 +54,7 @@ void IoCompletionPort::post(const PortData& data, std::error_code& ec)
 	}
 }
 
-std::optional<PortData> IoCompletionPort::get(std::error_code& ec)
+nonstd::optional<PortData> IoCompletionPort::get(std::error_code& ec)
 {
 	return wait_impl(INFINITE, ec);
 }
@@ -71,12 +71,12 @@ PortData IoCompletionPort::get()
 	return *data;
 }
 
-std::optional<PortData> IoCompletionPort::query(std::error_code& ec)
+nonstd::optional<PortData> IoCompletionPort::query(std::error_code& ec)
 {
 	return wait_impl(0/*no blocking wait*/, ec);
 }
 
-std::optional<PortData> IoCompletionPort::query()
+nonstd::optional<PortData> IoCompletionPort::query()
 {
 	std::error_code ec;
 	auto data = query(ec);
@@ -110,7 +110,7 @@ void IoCompletionPort::associate_socket(WinSOCKET socket, WinULONG_PTR key)
 	associate_with_impl(socket, key);
 }
 
-std::optional<PortData> IoCompletionPort::wait_impl(
+nonstd::optional<PortData> IoCompletionPort::wait_impl(
 	WinDWORD milliseconds, std::error_code& ec)
 {
 	DWORD bytes_transferred = 0;
@@ -132,7 +132,7 @@ std::optional<PortData> IoCompletionPort::wait_impl(
 	{
 		return data;
 	}
-	return std::nullopt;
+	return nonstd::nullopt;
 }
 
 void IoCompletionPort::associate_with_impl(

@@ -1,8 +1,8 @@
 #pragma once
 #include <win_io/detail/win_types.h>
+#include <win_io/detail/cpp17_integration.h>
 
 #include <iterator>
-#include <string_view>
 
 namespace wi
 {
@@ -10,9 +10,12 @@ namespace wi
 	{
 		struct DirectoryChange
 		{
-			WinDWORD action = 0;
+			WinDWORD action;
 			// Warning: not-null terminated file or folder name that caused `action`
-			std::wstring_view name;
+			nonstd::wstring_view name;
+
+			DirectoryChange(WinDWORD change_action = 0
+				, nonstd::wstring_view change_name = {});
 		};
 
 		class DirectoryChangesIterator;
@@ -92,6 +95,13 @@ namespace wi
 {
 	namespace detail
 	{
+
+		inline DirectoryChange::DirectoryChange(WinDWORD change_action /*= 0*/
+			, nonstd::wstring_view change_name /*= {}*/)
+			: action(change_action)
+			, name(std::move(change_name))
+		{
+		}
 
 		/*explicit*/ inline DirectoryChangesRange::DirectoryChangesRange(const void* buffer)
 			: buffer_(buffer)

@@ -2,8 +2,7 @@
 #include <win_io/detail/io_completion_port.h>
 #include <win_io/detail/directory_changes_range.h>
 #include <win_io/detail/read_directory_changes_errors.h>
-
-#include <variant>
+#include <win_io/detail/cpp17_integration.h>
 
 namespace wi
 {
@@ -35,7 +34,7 @@ namespace wi
 			const PortData* port_changes() const;
 
 		private:
-			std::variant<DirectoryChangesRange, PortData> data_;
+			nonstd::variant<DirectoryChangesRange, PortData> data_;
 		};
 
 		// Low-level wrapper around `::ReadDirectoryChangesW()`
@@ -66,7 +65,7 @@ namespace wi
 
 			WinHANDLE directory_handle() const;
 
-			// Usefull when single I/O completion port is used for
+			// Useful when single I/O completion port is used for
 			// tracking multiple directories changes.
 			// You will need to wait for I/O event and then check
 			// from which directory it coming.
@@ -157,27 +156,27 @@ namespace wi
 
 		inline bool DirectoryChangesResults::has_changes() const
 		{
-			return (data_.index() != std::variant_npos);
+			return (data_.index() != nonstd::variant_npos);
 		}
 
 		inline DirectoryChangesRange* DirectoryChangesResults::directory_changes()
 		{
-			return std::get_if<DirectoryChangesRange>(&data_);
+			return nonstd::get_if<DirectoryChangesRange>(&data_);
 		}
 
 		inline const DirectoryChangesRange* DirectoryChangesResults::directory_changes() const
 		{
-			return std::get_if<DirectoryChangesRange>(&data_);
+			return nonstd::get_if<DirectoryChangesRange>(&data_);
 		}
 
 		inline PortData* DirectoryChangesResults::port_changes()
 		{
-			return std::get_if<PortData>(&data_);
+			return nonstd::get_if<PortData>(&data_);
 		}
 
 		inline const PortData* DirectoryChangesResults::port_changes() const
 		{
-			return std::get_if<PortData>(&data_);
+			return nonstd::get_if<PortData>(&data_);
 		}
 
 	} // namespace detail

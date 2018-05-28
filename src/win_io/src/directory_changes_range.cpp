@@ -31,7 +31,7 @@ namespace
 		const std::size_t name_length = (static_cast<std::size_t>(info.FileNameLength) / sizeof(wchar_t));
 		DirectoryChange change;
 		change.action = info.Action;
-		change.name = std::wstring_view(info.FileName, name_length);
+		change.name = nonstd::wstring_view(info.FileName, name_length);
 		return change;
 	}
 } // namespace
