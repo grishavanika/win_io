@@ -274,6 +274,7 @@ void PrintChanges(const DirectoryChangesRange& range)
 	{
 		PrettyPrintDirectoryChange(change);
 	}
+	LogStreamW().flush();
 }
 
 void HandleError(const Options& options, const char* message, const std::error_code& ec)
