@@ -29,6 +29,12 @@ macro(detect_compilers)
 	cmake_print_variables(clang_on_msvc clang only_msvc gcc)
 endmacro()
 
+macro(detect_compiler_features)
+	set(has_coro_support ${only_msvc})
+
+	cmake_print_variables(has_coro_support clang only_msvc gcc)
+endmacro()
+
 macro(set_all_warnings target visibility)
 	if (only_msvc)
 		target_compile_options(${target} ${visibility}

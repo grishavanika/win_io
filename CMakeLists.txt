@@ -13,6 +13,7 @@ set(CMAKE_CONFIGURATION_TYPES "Debug;Release" CACHE STRING "" FORCE)
 
 detect_compilers()
 set_cpp17_standard()
+detect_compiler_features()
 
 if (clang_on_msvc)
 	make_clang_work_on_windows()
