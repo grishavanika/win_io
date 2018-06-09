@@ -17,6 +17,8 @@ namespace wi
 			public:
 				struct Item
 				{
+				private:
+					friend class IntrusiveQueue;
 					T* next = nullptr;
 				};
 
@@ -55,6 +57,7 @@ namespace wi
 			template<typename T>
 			void IntrusiveQueue<T>::push(T* value)
 			{
+				assert(value);
 				T* head = head_.load(std::memory_order_acquire);
 				do
 				{
