@@ -9,9 +9,9 @@ namespace wi
 		namespace
 		{
 
-			static_assert(sizeof(WinOVERLAPPEDBuffer) == sizeof(OVERLAPPED)
+			static_assert(sizeof(WinOVERLAPPED) == sizeof(OVERLAPPED)
 				, "Mismatch in OVERLAPPED size detected");
-			static_assert(alignof(WinOVERLAPPEDBuffer) == alignof(OVERLAPPED)
+			static_assert(alignof(WinOVERLAPPED) == alignof(OVERLAPPED)
 				, "Mismatch in OVERLAPPED align detected");
 
 		} // namespace

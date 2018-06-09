@@ -106,7 +106,7 @@ namespace wi
 			WinHANDLE directory_;
 			void* buffer_;
 			WinULONG_PTR dir_key_;
-			WinOVERLAPPEDBuffer ov_buffer_;
+			WinOVERLAPPED ov_;
 			WinDWORD length_;
 			WinDWORD notify_filter_;
 			bool owns_directory_;

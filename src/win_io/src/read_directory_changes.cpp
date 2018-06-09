@@ -11,21 +11,11 @@ using namespace detail;
 
 namespace
 {
-	OVERLAPPED& GetOverlapped(WinOVERLAPPEDBuffer& buffer)
+	OVERLAPPED& GetOverlapped(WinOVERLAPPED& ov)
 	{
-		return *reinterpret_cast<OVERLAPPED*>(&buffer);
+		return *reinterpret_cast<OVERLAPPED*>(&ov);
 	}
-
-	void CreateOverlapped(WinOVERLAPPEDBuffer& buffer)
-	{
-		new(static_cast<void*>(&buffer)) OVERLAPPED();
-	}
-
-	void DestroyOverlapped(WinOVERLAPPEDBuffer& buffer)
-	{
-		GetOverlapped(buffer).~OVERLAPPED();
-	}
-}
+} // namespace
 
 DirectoryChanges::DirectoryChanges(WinHANDLE directory, void* buffer
 	, WinDWORD length, bool watch_sub_tree, WinDWORD notify_filter
@@ -34,14 +24,12 @@ DirectoryChanges::DirectoryChanges(WinHANDLE directory, void* buffer
 	, directory_(directory)
 	, buffer_(buffer)
 	, dir_key_(dir_key)
-	, ov_buffer_()
+	, ov_()
 	, length_(length)
 	, notify_filter_(notify_filter)
 	, owns_directory_(false)
 	, watch_sub_tree_(watch_sub_tree)
 {
-	CreateOverlapped(ov_buffer_);
-
 	assert((reinterpret_cast<std::uintptr_t>(buffer) % sizeof(WinDWORD) == 0)
 		&& "[Dc] Buffer should be DWORD alligned");
 	assert(((directory != INVALID_HANDLE_VALUE) && (directory != nullptr))
@@ -92,8 +80,6 @@ const void* DirectoryChanges::buffer() const
 
 DirectoryChanges::~DirectoryChanges()
 {
-	DestroyOverlapped(ov_buffer_);
-
 	if (owns_directory_)
 	{
 		::CloseHandle(directory_);
@@ -106,7 +92,7 @@ void DirectoryChanges::start_watch(std::error_code& ec)
 	// See ::ReadDirectoryChangesExW(): starting from Windows 10
 	const BOOL status = ::ReadDirectoryChangesW(directory_
 		, buffer_, length_, watch_sub_tree_, notify_filter_
-		, nullptr, &GetOverlapped(ov_buffer_), nullptr);
+		, nullptr, &GetOverlapped(ov_), nullptr);
 	if (!status)
 	{
 		ec = make_last_error_code();
@@ -122,7 +108,7 @@ void DirectoryChanges::start_watch()
 
 bool DirectoryChanges::is_directory_change(const PortData& data) const
 {
-	return (data.key == dir_key_) && (data.ptr == &ov_buffer_);
+	return (data.key == dir_key_) && (data.ptr == &ov_);
 }
 
 DirectoryChangesResults DirectoryChanges::wait_impl(
