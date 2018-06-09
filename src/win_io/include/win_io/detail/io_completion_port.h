@@ -27,20 +27,21 @@ namespace wi
 			void post(const PortData& data, std::error_code& ec);
 			void post(const PortData& data);
 
+			// Blocking call.
 			// It's possible to have valid data, but still receive some `error_code`.
 			// See https://xania.org/200807/iocp article for possible
-			// combination of results from the call to ::GetQueuedCompletionStatus().
-			// Also, check original documentation
+			// combination of results from the call to ::GetQueuedCompletionStatus()
 			nonstd::optional<PortData> get(std::error_code& ec);
 			PortData get();
 
+			// Non-blocking call
 			nonstd::optional<PortData> query(std::error_code& ec);
 			nonstd::optional<PortData> query();
 
+			// Blocking call with time-out
 			template<typename Rep, typename Period>
 			nonstd::optional<PortData> wait_for(std::chrono::duration<Rep, Period> time
 				, std::error_code& ec);
-
 			template<typename Rep, typename Period>
 			nonstd::optional<PortData> wait_for(std::chrono::duration<Rep, Period> time);
 
