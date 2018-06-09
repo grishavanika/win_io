@@ -16,6 +16,7 @@ namespace wi
 		};
 
 		bool operator==(const PortData& lhs, const PortData& rhs);
+		bool operator!=(const PortData& lhs, const PortData& rhs);
 
 	} // namespace detail
 } // namespace wi
@@ -37,6 +38,11 @@ namespace wi
 			return ((lhs.value == rhs.value)
 				&& (lhs.key == rhs.key)
 				&& (lhs.ptr == rhs.ptr));
+		}
+
+		inline bool operator!=(const PortData& lhs, const PortData& rhs)
+		{
+			return !(lhs == rhs);
 		}
 
 	} // namespace detail
