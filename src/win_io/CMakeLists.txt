@@ -6,6 +6,13 @@ add_library(${lib_name} ${${lib_name}_files})
 
 set_all_warnings(${lib_name} PUBLIC)
 
+if (clang_on_msvc)
+	# anonymous types declared in an anonymous union are an extension.
+	# Needed for WinOVERLAPPED definition
+	target_compile_options(${lib_name} PUBLIC
+		-Wno-nested-anon-types)
+endif()
+
 # Turn-off not-needed Windows.h parts.
 # See http://web.archive.org/web/20121219084749/http://support.microsoft.com/kb/166474
 # for more details
