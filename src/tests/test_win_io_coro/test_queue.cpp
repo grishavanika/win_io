@@ -1,5 +1,5 @@
 #include <gtest/gtest.h>
-#include <win_io_coro/detail/queue.h>
+#include <win_io_coro/detail/intrusive_queue.h>
 
 #include <vector>
 #include <thread>
@@ -20,6 +20,18 @@ namespace
 		{
 		}
 	};
+
+	using Elements = std::vector<TestElement>;
+
+	Elements MakeElements(std::size_t count)
+	{
+		Elements elements;
+		for (std::size_t i = 0; i < count; ++i)
+		{
+			elements.emplace_back(static_cast<int>(i + 1));
+		}
+		return elements;
+	}
 
 	bool operator==(const TestElement& lhs, const TestElement& rhs)
 	{
@@ -90,14 +102,9 @@ TEST(Queue, Pop_Returns_In_FIFO_Order)
 
 TEST(Queue, Popped_Elements_From_Single_Thread_Are_Same_As_Input)
 {
-	constexpr int k_elements_count = 100;
+	constexpr std::size_t k_elements_count = 100;
 
-	std::vector<TestElement> input;
-	for (int i = 0; i < k_elements_count; ++i)
-	{
-		input.emplace_back(i + 1);
-	}
-
+	std::vector<TestElement> input = MakeElements(k_elements_count);
 	IntrusiveQueue<TestElement> queue;
 	for (auto& element : input)
 	{
@@ -117,16 +124,10 @@ TEST(Queue, Popped_Elements_From_Single_Thread_Are_Same_As_Input)
 
 TEST(Queue, Popped_Elements_From_Multiple_Threads_Are_Same_As_Input)
 {
-	using Elements = std::vector<TestElement>;
 	constexpr std::size_t k_workers_count = 5;
-	constexpr int k_elements_count = 100;
+	constexpr std::size_t k_elements_count = 100;
 
-	Elements input;
-	for (int i = 0; i < k_elements_count; ++i)
-	{
-		input.emplace_back(i + 1);
-	}
-
+	Elements input = MakeElements(k_elements_count);
 	IntrusiveQueue<TestElement> queue;
 	for (auto& element : input)
 	{
@@ -134,15 +135,15 @@ TEST(Queue, Popped_Elements_From_Multiple_Threads_Are_Same_As_Input)
 	}
 
 	std::vector<std::thread> workers;
-	std::vector<Elements> elements_per_thread;
+	std::vector<Elements> output_per_thread;
 	workers.reserve(k_workers_count);
-	elements_per_thread.resize(k_workers_count);
+	output_per_thread.resize(k_workers_count);
 
 	std::atomic_bool start(false);
 
-	for (std::size_t i = 0; i < k_workers_count; ++i)
+	for (std::size_t worker_id = 0; worker_id < k_workers_count; ++worker_id)
 	{
-		workers.emplace_back([&, i]()
+		workers.emplace_back([&, worker_id]()
 		{
 			// Spin-wait for start and some random delay is the best found way
 			// to distribute CPU time more-or-less consistently between threads
@@ -153,7 +154,7 @@ TEST(Queue, Popped_Elements_From_Multiple_Threads_Are_Same_As_Input)
 			}
 			SleepRandomly();
 
-			auto& elements = elements_per_thread[i];
+			auto& elements = output_per_thread[worker_id];
 			TestElement* element = nullptr;
 			while (queue.pop(element))
 			{
@@ -171,9 +172,62 @@ TEST(Queue, Popped_Elements_From_Multiple_Threads_Are_Same_As_Input)
 	}
 
 	std::vector<TestElement> output;
-	for (auto& elements : elements_per_thread)
+	for (auto& elements : output_per_thread)
 	{
 		output.insert(output.end(), elements.begin(), elements.end());
+	}
+
+	ASSERT_TRUE(std::is_permutation(
+		output.begin(), output.end()
+		, input.begin(), input.end()));
+}
+
+TEST(Queue, Contains_All_Pushed_From_Multiple_Threads_Elements)
+{
+	constexpr std::size_t k_workers_count = 5;
+	constexpr std::size_t k_elements_count = 100;
+	static_assert((k_elements_count % k_workers_count) == 0u,
+		"Elements count should be equivalent for each thread");
+	constexpr std::size_t k_elements_per_thread = (k_elements_count / k_workers_count);
+
+	Elements input = MakeElements(k_elements_count);
+	
+	std::vector<std::thread> workers;
+	workers.reserve(k_workers_count);
+
+	IntrusiveQueue<TestElement> queue;
+
+	std::atomic_bool start(false);
+
+	for (std::size_t worker_id = 0; worker_id < k_workers_count; ++worker_id)
+	{
+		workers.emplace_back([&, worker_id]()
+		{
+			while (!start)
+			{
+				std::this_thread::yield();
+			}
+
+			for (std::size_t i = 0; i < k_elements_per_thread; ++i)
+			{
+				TestElement& element = input[worker_id * k_elements_per_thread + i];
+				queue.push(&element);
+			}
+		});
+	}
+
+	start = true;
+
+	for (auto& worker : workers)
+	{
+		worker.join();
+	}
+
+	std::vector<TestElement> output;
+	TestElement* element = nullptr;
+	while (queue.pop(element))
+	{
+		output.push_back(*element);
 	}
 
 	ASSERT_TRUE(std::is_permutation(

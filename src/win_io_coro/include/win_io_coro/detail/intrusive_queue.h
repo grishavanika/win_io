@@ -69,7 +69,9 @@ namespace wi
 					std::memory_order_release,
 					std::memory_order_acquire));
 			}
-
+			
+			// #TODO: see better implemetation. Now, we do iterate thru all
+			// elements to get last one (first that was added)
 			template<typename T>
 			bool IntrusiveQueue<T>::pop(T*& value)
 			{
