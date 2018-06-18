@@ -1,21 +1,28 @@
 #include <gtest/gtest.h>
 #include <win_io_coro/io_coro_scheduler.h>
 
+#include <memory>
+
 using namespace wi;
 
 namespace
 {
 
 	// Fake awaitable task to introduce coroutine context.
-	// Does nothing, holds nothing
+	// Does nothing, holds in-progress status
 	struct TestTask
 	{
-		struct Token
-		{
-		};
+	public:
+		struct Token {};
 
+	private:
 		struct Promise
 		{
+			Promise()
+				: is_finished_()
+			{
+			}
+
 			std::experimental::suspend_never initial_suspend()
 			{
 				return {};
@@ -23,6 +30,10 @@ namespace
 
 			std::experimental::suspend_never final_suspend()
 			{
+				if (auto finished = is_finished_.lock())
+				{
+					*finished = true;
+				}
 				return {};
 			}
 
@@ -32,11 +43,32 @@ namespace
 
 			TestTask get_return_object()
 			{
-				return {};
+				TestTask task;
+				is_finished_ = task.is_finished_;
+				return task;
 			}
+
+		private:
+			std::weak_ptr<std::atomic_bool> is_finished_;
 		};
 
+	public:
 		using promise_type = Promise;
+
+		bool is_finished() const
+		{
+			return *is_finished_;
+		}
+
+	private:
+		explicit TestTask()
+			: is_finished_(std::make_shared<std::atomic_bool>(false))
+		{
+		}
+
+	private:
+		// Needs to be shared between Promise and Task
+		std::shared_ptr<std::atomic_bool> is_finished_;
 	};
 
 } // namespace
@@ -49,7 +81,7 @@ TEST(Coro, Fake_TestTask_Compiles_With_Co_Return)
 	};
 #if !defined(NDEBUG)
 	auto task = coro();
-	(void)task;
+	ASSERT_TRUE(task.is_finished());
 #else
 	(void)coro;
 	// #TODO: in Release configuration VS fails with ICE:
@@ -86,27 +118,24 @@ TEST(Coro, Coroutine_Is_Suspended_When_Waiting_For_Io_Task)
 	coro::IoScheduler scheduler(io_port);
 
 	bool started = false;
-	bool finished = false;
 	auto work = [&]() -> TestTask
 	{
 		started = true;
 		auto data = co_await scheduler.get();
 		(void)data;
-		finished = true;
 		co_return TestTask::Token();
 	};
 
 	ASSERT_FALSE(started);
-	ASSERT_FALSE(finished);
-	(void)work();
+	auto task = work();
 	ASSERT_TRUE(started);
-	ASSERT_FALSE(finished);
+	ASSERT_FALSE(task.is_finished());
 
 	io_port.post(detail::PortData(1));
-	ASSERT_FALSE(finished);
+	ASSERT_FALSE(task.is_finished());
 
 	ASSERT_EQ(1u, scheduler.poll_one());
-	ASSERT_TRUE(finished);
+	ASSERT_TRUE(task.is_finished());
 }
 
 TEST(Coro, Await_On_Io_Task_Returns_Posted_Data)
@@ -125,10 +154,12 @@ TEST(Coro, Await_On_Io_Task_Returns_Posted_Data)
 
 	auto task = work();
 	ASSERT_NE(post_data, await_data);
+	ASSERT_FALSE(task.is_finished());
 
 	io_port.post(post_data);
 	ASSERT_EQ(1u, scheduler.poll_one());
 	ASSERT_EQ(post_data, await_data);
+	ASSERT_TRUE(task.is_finished());
 }
 
 TEST(Coro, Its_Possible_To_Await_On_More_Then_One_Io_Task_In_The_Same_Coro)
@@ -160,18 +191,21 @@ TEST(Coro, Its_Possible_To_Await_On_More_Then_One_Io_Task_In_The_Same_Coro)
 	ASSERT_EQ(State::None, state);
 	auto task = work();
 	ASSERT_EQ(State::Entered, state);
+	ASSERT_FALSE(task.is_finished());
 
 	io_port.post(detail::PortData(3));
 	
 	ASSERT_EQ(State::Entered, state);
 	ASSERT_EQ(1u, scheduler.poll_one());
 	ASSERT_EQ(State::Wait_1_Finished, state);
+	ASSERT_FALSE(task.is_finished());
 
 	io_port.post(detail::PortData(4));
 
 	ASSERT_EQ(State::Wait_1_Finished, state);
 	ASSERT_EQ(1u, scheduler.poll_one());
 	ASSERT_EQ(State::Wait_2_Finished, state);
+	ASSERT_TRUE(task.is_finished());
 
 	ASSERT_EQ(detail::PortData(4), last_data);
 }
