@@ -2,6 +2,10 @@
 #include <win_io_coro/io_coro_scheduler.h>
 
 #include <memory>
+#include <vector>
+#include <thread>
+#include <atomic>
+#include <chrono>
 
 using namespace wi;
 
@@ -209,3 +213,62 @@ TEST(Coro, Its_Possible_To_Await_On_More_Then_One_Io_Task_In_The_Same_Coro)
 
 	ASSERT_EQ(detail::PortData(4), last_data);
 }
+
+TEST(Coro, Await_From_Multiple_Threads_Is_Safe)
+{
+	constexpr std::size_t k_coro_threads_count = 10;
+
+	detail::IoCompletionPort io_port;
+	coro::IoScheduler scheduler(io_port);
+	std::atomic_bool start(false);
+	std::atomic_size_t finished_count(0);
+
+	auto awaiter = [&scheduler]() -> TestTask
+	{
+		auto data = co_await scheduler.get();
+		(void)data;
+		co_return TestTask::Token();
+	};
+
+	auto worker = [=, &start, &finished_count]()
+	{
+		while (!start)
+		{
+			std::this_thread::yield();
+		}
+		auto task = awaiter();
+		while (!task.is_finished())
+		{
+			std::this_thread::yield();
+		}
+		++finished_count;
+	};
+
+	std::vector<std::thread> coros;
+	for (std::size_t i = 0; i < k_coro_threads_count; ++i)
+	{
+		coros.emplace_back(worker);
+	}
+
+	start = true;
+	// Wait a little bit while coroutine will be invoked
+	std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+	for (std::size_t i = 0; i < k_coro_threads_count; ++i)
+	{
+		ASSERT_EQ(i, finished_count);
+		io_port.post(detail::PortData(1));
+		ASSERT_EQ(i, finished_count);
+		ASSERT_EQ(1u, scheduler.poll_one());
+		
+		// Wait a little bit while result will be processed
+		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		ASSERT_EQ((i + 1), finished_count);
+	}
+
+	for (auto& coro : coros)
+	{
+		coro.join();
+	}
+}
+
