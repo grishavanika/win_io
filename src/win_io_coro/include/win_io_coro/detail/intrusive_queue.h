@@ -12,7 +12,14 @@ namespace wi
 		namespace detail
 		{
 			// Lock-free, intrusive, non-owning queue.
-			// (Thread-safe pointers-like container)
+			// (Thread-safe pointers-like container).
+			// 
+			// Note: push() and pop() functions are modified versions of the queue
+			// from cppcoro: https://github.com/lewissbaker/cppcoro/blob/master/lib/io_service.cpp
+			// 
+ 			// #TODO: learn better implemetation. Now, we do iterate thru all
+			// elements to get last one (first that was added)
+
 			template<typename T>
 			class IntrusiveQueue
 			{
@@ -72,8 +79,6 @@ namespace wi
 					std::memory_order_acquire));
 			}
 			
-			// #TODO: see better implemetation. Now, we do iterate thru all
-			// elements to get last one (first that was added)
 			template<typename T>
 			bool IntrusiveQueue<T>::pop(T*& value)
 			{
@@ -81,12 +86,14 @@ namespace wi
 				T* local_head = head_.exchange(nullptr, std::memory_order_acquire);
 				if (!local_head)
 				{
+					// The queue is empty
 					return false;
 				}
 
 				T* tail = local_head;
 				while (tail->next)
 				{
+					// Find & erase last element
 					const bool before_last = (tail->next->next == nullptr);
 					if (before_last)
 					{
@@ -97,10 +104,12 @@ namespace wi
 				}
 				if ((tail == local_head) && (value == nullptr))
 				{
+					// The queue contains only one element
 					std::swap(value, local_head);
 					return true;
 				}
 
+				// Merge old queue with (possibly) new one
 				T* new_head = nullptr;
 				while (!head_.compare_exchange_weak(
 					new_head,
