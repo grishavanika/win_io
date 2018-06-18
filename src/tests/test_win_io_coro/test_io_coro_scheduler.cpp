@@ -68,6 +68,18 @@ TEST(Coro, IoScheduler_Poll_One_Returns_Zero_When_No_Task_Was_Created)
 	ASSERT_EQ(0u, scheduler.poll_one());
 }
 
+TEST(Coro, IoScheduler_Poll_One_Returns_Zero_When_Data_Exists_But_No_Task_Was_Created)
+{
+	detail::IoCompletionPort io_port;
+	coro::IoScheduler scheduler(io_port);
+
+	io_port.post(detail::PortData(1));
+
+	ASSERT_EQ(0u, scheduler.poll_one());
+
+	ASSERT_TRUE(io_port.query().has_value());
+}
+
 TEST(Coro, Coroutine_Is_Suspended_When_Waiting_For_Io_Task)
 {
 	detail::IoCompletionPort io_port;

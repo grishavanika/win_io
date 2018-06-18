@@ -3,6 +3,8 @@
 
 #include <type_traits>
 
+#include <cassert>
+
 namespace wi
 {
 	namespace coro

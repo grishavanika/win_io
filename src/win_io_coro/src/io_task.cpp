@@ -20,10 +20,10 @@ IoTask::IoTask(IoTask&& rhs) noexcept
 {
 	rhs.scheduler_ = nullptr;
 	rhs.coro_ = nullptr;
-	rhs.data_ = detail::PortData();
+	rhs.data_ = PortData();
 }
 
-void IoTask::set(detail::PortData data)
+void IoTask::set(PortData data)
 {
 	assert(coro_);
 	data_ = std::move(data);
@@ -37,7 +37,7 @@ bool IoTask::await_ready() const noexcept
 	return false;
 }
 
-detail::PortData IoTask::await_resume() noexcept
+PortData IoTask::await_resume() noexcept
 {
 	return std::move(data_);
 }

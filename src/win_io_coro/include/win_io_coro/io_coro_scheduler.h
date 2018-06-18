@@ -8,11 +8,12 @@ namespace wi
 {
 	namespace coro
 	{
+		using IoCompletionPort = ::wi::detail::IoCompletionPort;
 
 		class IoScheduler
 		{
 		public:
-			IoScheduler(detail::IoCompletionPort& io_port);
+			IoScheduler(IoCompletionPort& io_port);
 		
 			std::size_t poll();
 			std::size_t poll_one();
@@ -25,12 +26,14 @@ namespace wi
 			// becomes available
 			IoTask get();
 
+		private:
+			friend class IoTask;
 			void add(IoTask& task);
 
 		private:
-			detail::IoCompletionPort& io_port_;
-			IoTask* task_ = nullptr;
-		};	
+			IoCompletionPort& io_port_;
+			detail::IntrusiveQueue<IoTask> tasks_;
+		};
 
 	} // namespace coro
 } // namespace wi

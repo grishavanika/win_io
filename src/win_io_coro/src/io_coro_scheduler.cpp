@@ -5,7 +5,7 @@
 using namespace wi;
 using namespace coro;
 
-IoScheduler::IoScheduler(detail::IoCompletionPort& io_port)
+IoScheduler::IoScheduler(IoCompletionPort& io_port)
 	: io_port_(io_port)
 {
 }
@@ -22,16 +22,19 @@ std::size_t IoScheduler::poll_one()
 		return 0;
 	}
 
-	if (task_)
+	IoTask* task = nullptr;
+	if (!tasks_.pop(task))
 	{
-		// #TODO: pop task from the queue
-		IoTask* task = task_;
-		task_ = nullptr;
-
-		task->set(std::move(*data));
-		return 1;
+		// We have no any waiting task. Put the data back to the I/O Port
+		io_port_.post(*data, ec);
+		// #TODO: think about proper error handling
+		assert(!ec && "Failed to put data back to the I/O Port: "
+			"data lost happened");
+		return 0;
 	}
-	return 0;
+
+	task->set(std::move(*data));
+	return 1;
 }
 
 IoTask IoScheduler::get()
@@ -41,9 +44,7 @@ IoTask IoScheduler::get()
 
 void IoScheduler::add(IoTask& task)
 {
-	// #TODO: maintain concurrent list of tasks
-	assert(!task_);
-	task_ = &task;
+	tasks_.push(&task);
 }
 
 std::size_t IoScheduler::poll()
