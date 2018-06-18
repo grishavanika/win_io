@@ -21,6 +21,7 @@ namespace wi
 		{
 		public:
 			IoTask(IoScheduler& scheduler);
+			~IoTask();
 
 			IoTask(IoTask&& rhs) noexcept;
 			IoTask& operator=(IoTask&& rhs) = delete;

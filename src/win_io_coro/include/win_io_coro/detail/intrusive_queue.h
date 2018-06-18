@@ -41,6 +41,10 @@ namespace wi
 				void push(T* value);
 				bool pop(T*& value);
 
+				bool is_empty() const;
+
+				bool erase(T* value);
+
 			private:
 				std::atomic<T*> head_;
 			};
@@ -61,6 +65,20 @@ namespace wi
 			{
 				static_assert(std::is_base_of<Item, T>::value,
 					"T should be derived from Queue<T>::Item to stored in the queue");
+			}
+
+			template<typename T>
+			bool IntrusiveQueue<T>::is_empty() const
+			{
+				return (head_ == nullptr);
+			}
+
+			template<typename T>
+			bool IntrusiveQueue<T>::erase(T* value)
+			{
+				// #TODO: can't be easily done ?
+				(void)value;
+				return false;
 			}
 
 			template<typename T>

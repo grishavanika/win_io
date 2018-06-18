@@ -10,6 +10,13 @@ IoScheduler::IoScheduler(IoCompletionPort& io_port)
 {
 }
 
+IoScheduler::~IoScheduler()
+{
+	assert(tasks_.is_empty() &&
+		"Coroutine tasks still running while destroying IoScheduler. "
+		"Probably access to deleted object will happen");
+}
+
 std::size_t IoScheduler::poll_one()
 {
 	std::error_code ec;
@@ -45,6 +52,11 @@ IoTask IoScheduler::get()
 void IoScheduler::add(IoTask& task)
 {
 	tasks_.push(&task);
+}
+
+void IoScheduler::remove(IoTask& task)
+{
+	tasks_.erase(&task);
 }
 
 std::size_t IoScheduler::poll()

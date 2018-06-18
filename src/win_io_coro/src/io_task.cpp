@@ -13,6 +13,16 @@ IoTask::IoTask(IoScheduler& scheduler)
 {
 }
 
+IoTask::~IoTask()
+{
+	if (scheduler_)
+	{
+		// #TODO: think about this. What can be done ?
+		// We can die in (probably) in-progress state
+		scheduler_->remove(*this);
+	}
+}
+
 IoTask::IoTask(IoTask&& rhs) noexcept
 	: scheduler_(rhs.scheduler_)
 	, coro_(std::move(rhs.coro_))

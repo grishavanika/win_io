@@ -14,7 +14,8 @@ namespace wi
 		{
 		public:
 			IoScheduler(IoCompletionPort& io_port);
-		
+			~IoScheduler();
+
 			std::size_t poll();
 			std::size_t poll_one();
 
@@ -29,6 +30,7 @@ namespace wi
 		private:
 			friend class IoTask;
 			void add(IoTask& task);
+			void remove(IoTask& task);
 
 		private:
 			IoCompletionPort& io_port_;
