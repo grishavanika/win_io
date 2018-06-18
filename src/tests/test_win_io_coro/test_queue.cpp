@@ -234,3 +234,9 @@ TEST(Queue, Contains_All_Pushed_From_Multiple_Threads_Elements)
 		output.begin(), output.end()
 		, input.begin(), input.end()));
 }
+
+TEST(Queue, Multiple_Producers_Consumers_Threads)
+{
+	ASSERT_TRUE(false) << "Not implemented yet";
+}
+
