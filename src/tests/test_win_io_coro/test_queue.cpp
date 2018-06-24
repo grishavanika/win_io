@@ -33,6 +33,24 @@ namespace
 		return elements;
 	}
 
+	Elements FlattenElements(std::vector<Elements> data)
+	{
+		Elements output;
+		for (auto& elements : data)
+		{
+			output.insert(output.end(), elements.begin(), elements.end());
+		}
+		return output;
+	}
+
+	void WaitAll(std::vector<std::thread>& threads)
+	{
+		for (auto& thread : threads)
+		{
+			thread.join();
+		}
+	}
+
 	bool operator==(const TestElement& lhs, const TestElement& rhs)
 	{
 		return (lhs.value == rhs.value);
@@ -141,6 +159,7 @@ TEST(Queue, Popped_Elements_From_Multiple_Threads_Are_Same_As_Input)
 
 	std::atomic_bool start(false);
 
+	// Spawn consumers threads
 	for (std::size_t worker_id = 0; worker_id < k_workers_count; ++worker_id)
 	{
 		workers.emplace_back([&, worker_id]()
@@ -165,17 +184,9 @@ TEST(Queue, Popped_Elements_From_Multiple_Threads_Are_Same_As_Input)
 	}
 
 	start = true;
-	
-	for (auto& worker : workers)
-	{
-		worker.join();
-	}
+	WaitAll(workers);
 
-	std::vector<TestElement> output;
-	for (auto& elements : output_per_thread)
-	{
-		output.insert(output.end(), elements.begin(), elements.end());
-	}
+	Elements output = FlattenElements(std::move(output_per_thread));
 
 	ASSERT_TRUE(std::is_permutation(
 		output.begin(), output.end()
@@ -199,6 +210,7 @@ TEST(Queue, Contains_All_Pushed_From_Multiple_Threads_Elements)
 
 	std::atomic_bool start(false);
 
+	// Spawn producers threads
 	for (std::size_t worker_id = 0; worker_id < k_workers_count; ++worker_id)
 	{
 		workers.emplace_back([&, worker_id]()
@@ -217,11 +229,7 @@ TEST(Queue, Contains_All_Pushed_From_Multiple_Threads_Elements)
 	}
 
 	start = true;
-
-	for (auto& worker : workers)
-	{
-		worker.join();
-	}
+	WaitAll(workers);
 
 	std::vector<TestElement> output;
 	TestElement* element = nullptr;
@@ -237,6 +245,85 @@ TEST(Queue, Contains_All_Pushed_From_Multiple_Threads_Elements)
 
 TEST(Queue, Multiple_Producers_Consumers_Threads)
 {
-	ASSERT_TRUE(false) << "Not implemented yet";
+	constexpr std::size_t k_producers_count = 5;
+	constexpr std::size_t k_consumers_count = 5;
+	constexpr std::size_t k_elements_count = 200;
+	static_assert((k_elements_count % k_producers_count) == 0u,
+		"Elements count should be equivalent for each producer thread");
+	constexpr std::size_t k_elements_per_producer = (k_elements_count / k_producers_count);
+
+	Elements input = MakeElements(k_elements_count);
+	std::vector<Elements> output_per_consumer;
+	output_per_consumer.resize(k_consumers_count);
+
+	std::vector<std::thread> producers;
+	producers.reserve(k_producers_count);
+	std::vector<std::thread> consumers;
+	consumers.reserve(k_consumers_count);
+
+	IntrusiveQueue<TestElement> queue;
+
+	std::atomic_bool start(false);
+	std::atomic_bool producers_finished(false);
+
+	// Spawn producers threads
+	for (std::size_t producer_id = 0; producer_id < k_producers_count; ++producer_id)
+	{
+		producers.emplace_back([&, producer_id]()
+		{
+			while (!start)
+			{
+				std::this_thread::yield();
+			}
+
+			for (std::size_t i = 0; i < k_elements_per_producer; ++i)
+			{
+				TestElement& element = input[producer_id * k_elements_per_producer + i];
+				queue.push(&element);
+			}
+		});
+	}
+
+	// Spawn consumers threads
+	for (std::size_t consumer_id = 0; consumer_id < k_consumers_count; ++consumer_id)
+	{
+		consumers.emplace_back([&, consumer_id]()
+		{
+			while (!start)
+			{
+				std::this_thread::yield();
+			}
+
+			auto& elements = output_per_consumer[consumer_id];
+			while (true)
+			{
+				TestElement* element = nullptr;
+				if (queue.pop(element))
+				{
+					elements.push_back(*element);
+				}
+				else if (producers_finished)
+				{
+					break;
+				}
+			}
+		});
+	}
+
+	start = true;
+	WaitAll(producers);
+	producers_finished = true;
+	WaitAll(consumers);
+
+	ASSERT_TRUE(queue.is_empty());
+
+	Elements output = FlattenElements(output_per_consumer);
+
+	ASSERT_TRUE(std::is_permutation(
+		output.begin(), output.end()
+		, input.begin(), input.end()))
+		<< "Consumed elements are not the same as produced ones. "
+		<< "Input size: " << input.size() << ". "
+		<< "Output size: " << output.size();
 }
 

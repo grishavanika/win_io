@@ -135,7 +135,7 @@ namespace wi
 					std::memory_order_release,
 					std::memory_order_relaxed))
 				{
-					local_head->next = new_head;
+					tail->next = new_head;
 				}
 
 				return true;
