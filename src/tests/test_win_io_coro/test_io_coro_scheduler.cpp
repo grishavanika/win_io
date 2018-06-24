@@ -262,7 +262,7 @@ TEST(Coro, Await_From_Multiple_Threads_Is_Safe)
 		ASSERT_EQ(1u, scheduler.poll_one());
 		
 		// Wait a little bit while result will be processed
-		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		std::this_thread::sleep_for(std::chrono::milliseconds(100));
 		ASSERT_EQ((i + 1), finished_count);
 	}
 
