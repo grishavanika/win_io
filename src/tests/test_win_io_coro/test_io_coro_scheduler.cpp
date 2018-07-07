@@ -23,7 +23,7 @@ namespace
 		struct Promise
 		{
 			Promise()
-				: is_finished_()
+				: is_finished_(false)
 			{
 			}
 
@@ -32,12 +32,9 @@ namespace
 				return {};
 			}
 
-			std::experimental::suspend_never final_suspend()
+			std::experimental::suspend_always final_suspend()
 			{
-				if (auto finished = is_finished_.lock())
-				{
-					*finished = true;
-				}
+				is_finished_ = true;
 				return {};
 			}
 
@@ -47,13 +44,12 @@ namespace
 
 			TestTask get_return_object()
 			{
-				TestTask task;
-				is_finished_ = task.is_finished_;
-				return task;
+				auto coro = std::experimental::coroutine_handle<Promise>::from_promise(*this);
+				return TestTask(is_finished_, coro);
 			}
 
 		private:
-			std::weak_ptr<std::atomic_bool> is_finished_;
+			std::atomic_bool is_finished_;
 		};
 
 	public:
@@ -64,15 +60,43 @@ namespace
 			return *is_finished_;
 		}
 
+		TestTask(const TestTask&) = delete;
+		TestTask& operator=(const TestTask&) = delete;
+		TestTask& operator=(TestTask&&) = delete;
+
+		// Should not be needed in C++17, but MSVC complains
+		TestTask(TestTask&& rhs)
+			: is_finished_(rhs.is_finished_)
+			, coro_(rhs.coro_)
+		{
+			rhs.is_finished_ = nullptr;
+			coro_ = {};
+		}
+
+		~TestTask()
+		{
+			if (is_finished_ == nullptr)
+			{
+				// Was moved
+				return;
+			}
+
+			assert(*is_finished_);
+			coro_.destroy();
+		}
+
 	private:
-		explicit TestTask()
-			: is_finished_(std::make_shared<std::atomic_bool>(false))
+		explicit TestTask(std::atomic_bool& is_finished
+			, std::experimental::coroutine_handle<> coro)
+			: is_finished_(&is_finished)
+			, coro_(coro)
 		{
 		}
 
 	private:
 		// Needs to be shared between Promise and Task
-		std::shared_ptr<std::atomic_bool> is_finished_;
+		std::atomic_bool* is_finished_;
+		std::experimental::coroutine_handle<> coro_;
 	};
 
 } // namespace
@@ -83,18 +107,8 @@ TEST(Coro, Fake_TestTask_Compiles_With_Co_Return)
 	{
 		co_return TestTask::Token();
 	};
-#if !defined(NDEBUG)
 	auto task = coro();
 	ASSERT_TRUE(task.is_finished());
-#else
-	(void)coro;
-	// #TODO: in Release configuration VS fails with ICE:
-	// 
-	// test_io_coro_scheduler.cpp(49) : fatal error C1001 : An internal error has occurred in the compiler.
-	// 1 > (compiler file 'f:\dd\vctools\compiler\utc\src\p2\main.c', line 260)
-	//
-	// Report the issue
-#endif
 }
 
 TEST(Coro, IoScheduler_Poll_One_Returns_Zero_When_No_Task_Was_Created)
