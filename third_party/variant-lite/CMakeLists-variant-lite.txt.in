@@ -2,10 +2,9 @@ cmake_minimum_required(VERSION 2.8.2)
 
 project(variant-lite-download NONE)
 
-# https://github.com/martinmoene/variant-lite.git
 include(ExternalProject)
 ExternalProject_Add(variant-lite
-  GIT_REPOSITORY    https://github.com/grishavanika/variant-lite.git
+  GIT_REPOSITORY    https://github.com/martinmoene/variant-lite.git
   GIT_TAG           master
   SOURCE_DIR        "${CMAKE_BINARY_DIR}/variant-lite-src"
   BINARY_DIR        ""
