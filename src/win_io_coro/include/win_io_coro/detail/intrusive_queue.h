@@ -43,8 +43,6 @@ namespace wi
 
 				bool is_empty() const;
 
-				bool erase(T* value);
-
 			private:
 				std::atomic<T*> head_;
 			};
@@ -71,14 +69,6 @@ namespace wi
 			bool IntrusiveQueue<T>::is_empty() const
 			{
 				return (head_ == nullptr);
-			}
-
-			template<typename T>
-			bool IntrusiveQueue<T>::erase(T* value)
-			{
-				// #TODO: can't be easily done ?
-				(void)value;
-				return false;
 			}
 
 			template<typename T>

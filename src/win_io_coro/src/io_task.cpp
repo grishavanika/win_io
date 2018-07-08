@@ -15,12 +15,17 @@ IoTask::IoTask(IoScheduler& scheduler)
 
 IoTask::~IoTask()
 {
-	if (scheduler_)
-	{
-		// #TODO: think about this. What can be done ?
-		// We can die in (probably) in-progress state
-		scheduler_->remove(*this);
-	}
+	// It's possible to be destroyed while co_await-ing on this
+	// task, hence it should be removed from the `scheduler_`'s list.
+	// 
+	// Quoting Lewis Baker (https://github.com/lewissbaker):
+	// "Awaitables that have been given responsibility for scheduling
+	// resumption of a coroutine inside a `co_await` statement should
+	// generally not need to worry about the coroutine being destroyed
+	// out from under them"
+	// 
+	// Looks like it's bad idea to destroy coroutine while it's await-ing
+	// something else
 }
 
 IoTask::IoTask(IoTask&& rhs) noexcept

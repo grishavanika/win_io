@@ -30,7 +30,6 @@ namespace wi
 		private:
 			friend class IoTask;
 			void add(IoTask& task);
-			void remove(IoTask& task);
 
 		private:
 			IoCompletionPort& io_port_;

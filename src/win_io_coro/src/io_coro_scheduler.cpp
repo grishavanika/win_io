@@ -54,11 +54,6 @@ void IoScheduler::add(IoTask& task)
 	tasks_.push(&task);
 }
 
-void IoScheduler::remove(IoTask& task)
-{
-	tasks_.erase(&task);
-}
-
 std::size_t IoScheduler::poll()
 {
 	// #TODO: add stop() mechanizm

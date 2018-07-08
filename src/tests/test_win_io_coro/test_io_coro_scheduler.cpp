@@ -94,7 +94,6 @@ namespace
 		}
 
 	private:
-		// Needs to be shared between Promise and Task
 		std::atomic_bool* is_finished_;
 		std::experimental::coroutine_handle<> coro_;
 	};
