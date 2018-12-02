@@ -16,9 +16,6 @@ namespace
 	// Does nothing, holds in-progress status
 	struct TestTask
 	{
-	public:
-		struct Token {};
-
 	private:
 		struct Promise
 		{
@@ -37,11 +34,7 @@ namespace
 				is_finished_ = true;
 				return {};
 			}
-
-			void return_value(Token)
-			{
-			}
-
+			
 			TestTask get_return_object()
 			{
 				auto coro = std::experimental::coroutine_handle<Promise>::from_promise(*this);
@@ -104,7 +97,7 @@ TEST(Coro, Fake_TestTask_Compiles_With_Co_Return)
 {
 	auto coro = []() -> TestTask
 	{
-		co_return TestTask::Token();
+		co_return;
 	};
 	auto task = coro();
 	ASSERT_TRUE(task.is_finished());
@@ -140,7 +133,7 @@ TEST(Coro, Coroutine_Is_Suspended_When_Waiting_For_Io_Task)
 		started = true;
 		auto data = co_await scheduler.get();
 		(void)data;
-		co_return TestTask::Token();
+		co_return;
 	};
 
 	ASSERT_FALSE(started);
@@ -166,7 +159,7 @@ TEST(Coro, Await_On_Io_Task_Returns_Posted_Data)
 	auto work = [&]() -> TestTask
 	{
 		await_data = co_await scheduler.get();
-		co_return TestTask::Token();
+		co_return;
 	};
 
 	auto task = work();
@@ -202,7 +195,7 @@ TEST(Coro, Its_Possible_To_Await_On_More_Then_One_Io_Task_In_The_Same_Coro)
 		state = State::Wait_1_Finished;
 		last_data = co_await scheduler.get();
 		state = State::Wait_2_Finished;
-		co_return TestTask::Token();
+		co_return;
 	};
 
 	ASSERT_EQ(State::None, state);
@@ -240,7 +233,7 @@ TEST(Coro, Await_From_Multiple_Threads_Is_Safe)
 	{
 		auto data = co_await scheduler.get();
 		(void)data;
-		co_return TestTask::Token();
+		co_return;
 	};
 
 	auto worker = [=, &start, &finished_count]()
