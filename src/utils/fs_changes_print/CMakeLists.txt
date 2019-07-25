@@ -1,4 +1,4 @@
-set(exe_name print_changes)
+set(exe_name fs_changes_print)
 
 target_collect_sources(${exe_name})
 

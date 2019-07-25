@@ -31,10 +31,10 @@ They are replaced with back-ported versions from Martin Moene:
 
 #### print_changes (src/utils)
 
-![](tools/images/print_changes.gif)
+![](tools/images/fs_changes_print.exe.gif)
 
 ```
-print_changes.exe
+fs_changes_print.exe
 Help:
 print_changes.exe <directory> +flags
 Note: + without any flags (or empty filters flags) means all filters flags
@@ -58,7 +58,7 @@ Output actions flags:
         o: File was renamed and this is the old name
         n: File was renamed and this is the new name
 Example:
-print_changes.exe C:\ +rf
+fs_changes_print.exe C:\ +rf
 
 Possible output:
 +a new_file.txt
