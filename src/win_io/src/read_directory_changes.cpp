@@ -125,7 +125,8 @@ DirectoryChangesResults DirectoryChanges::wait_impl(
 	{
 		return DirectoryChangesResults(std::move(*data));
 	}
-	return DirectoryChangesResults(DirectoryChangesRange(buffer_));
+	return DirectoryChangesResults(DirectoryChangesRange(
+		buffer_, static_cast<std::size_t>(data->value)));
 }
 
 DirectoryChangesResults DirectoryChanges::get(std::error_code& ec)

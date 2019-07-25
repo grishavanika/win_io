@@ -277,11 +277,19 @@ void PrintChanges(const DirectoryChangesRange& range)
 	LogStreamW().flush();
 }
 
-void HandleError(const Options& options, const char* message, const std::error_code& ec)
+void HandleError(const Options& options, const char* message
+	, const std::error_code& ec = std::error_code())
 {
 	if (options.verbose)
 	{
-		ErrorStream() << message << ": " << ec.message() << "\n";
+		if (ec)
+		{
+			ErrorStream() << message << ": " << ec.message() << "\n";
+		}
+		else
+		{
+			ErrorStream() << message << "\n";
+		}
 	}
 }
 
@@ -304,7 +312,6 @@ void HandleNonDirectoryResults(const Options& options, const DirectoryChangesRes
 
 	throw PrintChangesError("Unreachable code");
 }
-
 
 [[noreturn]] void WatchForever(const Options& options)
 {
@@ -330,13 +337,20 @@ void HandleNonDirectoryResults(const Options& options, const DirectoryChangesRes
 			continue;
 		}
 
-		if (auto changes = results.directory_changes())
+		auto changes = results.directory_changes();
+		if (!changes)
 		{
-			PrintChanges(*changes);
+			HandleNonDirectoryResults(options, results);
 			continue;
 		}
 
-		HandleNonDirectoryResults(options, results);
+		if (!changes->has_any())
+		{
+			HandleError(options, "Too small buffer for all changes");
+			continue;
+		}
+
+		PrintChanges(*changes);
 	}
 }
 

@@ -4,6 +4,8 @@
 
 #include <iterator>
 
+#include <cassert>
+
 namespace wi
 {
 	namespace detail
@@ -32,8 +34,10 @@ namespace wi
 			// after one succesfull call to `::ReadDirectoryChangesW()`.
 			// (`buffer` is DWORD-aligned, variable length array of
 			// `FILE_NOTIFY_INFORMATION` structs)
-			explicit DirectoryChangesRange(const void* buffer);
+			explicit DirectoryChangesRange(const void* buffer, std::size_t size);
 			explicit DirectoryChangesRange();
+
+			bool has_any() const;
 
 			iterator begin();
 			const_iterator begin() const;
@@ -47,6 +51,7 @@ namespace wi
 
 		private:
 			const void* buffer_;
+			std::size_t size_;
 		};
 
 		// Models read-only `ForwardIterator`
@@ -60,7 +65,7 @@ namespace wi
 			using difference_type = std::ptrdiff_t;
 
 			explicit DirectoryChangesIterator();
-			explicit DirectoryChangesIterator(const void* buffer);
+			explicit DirectoryChangesIterator(const void* buffer, const std::size_t max_size);
 
 			DirectoryChangesIterator operator++();
 			DirectoryChangesIterator operator++(int);
@@ -77,10 +82,17 @@ namespace wi
 				, const DirectoryChangesIterator& rhs);
 
 		private:
+			void move_to_next();
+			std::size_t available_size() const;
+
+		private:
 			const void* current_;
 			// Needed for proper implementation of operator->()
 			// (that requires to return pointer)
 			DirectoryChange value_;
+
+			std::size_t consumed_size_;
+            std::size_t max_size_;
 		};
 
 		bool operator==(const DirectoryChangesIterator& lhs
@@ -103,34 +115,41 @@ namespace wi
 		{
 		}
 
-		/*explicit*/ inline DirectoryChangesRange::DirectoryChangesRange(const void* buffer)
+		/*explicit*/ inline DirectoryChangesRange::DirectoryChangesRange(
+			const void* buffer, const std::size_t size)
 			: buffer_(buffer)
+			, size_(size)
 		{
 		}
 
 		/*explicit*/ inline DirectoryChangesRange::DirectoryChangesRange()
-			: DirectoryChangesRange(nullptr)
+			: DirectoryChangesRange(nullptr, 0)
 		{
+		}
+
+		inline bool DirectoryChangesRange::has_any() const
+		{
+			return (size_ != 0) && (buffer_ != nullptr);
 		}
 
 		inline DirectoryChangesRange::iterator DirectoryChangesRange::begin()
 		{
-			return iterator(buffer_);
+			return iterator(buffer_, size_);
 		}
 
 		inline DirectoryChangesRange::const_iterator DirectoryChangesRange::begin() const
 		{
-			return const_iterator(buffer_);
+			return const_iterator(buffer_, size_);
 		}
 
 		inline DirectoryChangesRange::const_iterator DirectoryChangesRange::cbegin()
 		{
-			return const_iterator(buffer_);
+			return const_iterator(buffer_, size_);
 		}
 
 		inline DirectoryChangesRange::const_iterator DirectoryChangesRange::cbegin() const
 		{
-			return const_iterator(buffer_);
+			return const_iterator(buffer_, size_);
 		}
 
 		inline DirectoryChangesRange::iterator DirectoryChangesRange::end()

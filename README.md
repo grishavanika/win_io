@@ -31,12 +31,12 @@ They are replaced with back-ported versions from Martin Moene:
 
 #### print_changes (src/utils)
 
-![](tools/images/fs_changes_print.exe.gif)
+![](tools/images/fs_changes_print.gif)
 
 ```
 fs_changes_print.exe
 Help:
-print_changes.exe <directory> +flags
+fs_changes_print.exe <directory> +flags
 Note: + without any flags (or empty filters flags) means all filters flags
 General flags:
         r: Recursive directory watch (watch with subtree)
