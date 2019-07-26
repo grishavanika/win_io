@@ -111,6 +111,20 @@ bool DirectoryChanges::is_directory_change(const PortData& data) const
 	return (data.key == dir_key_) && (data.ptr == &ov_);
 }
 
+bool DirectoryChanges::has_buffer_overflow(const PortData& data) const
+{
+	const auto buffer_size = data.value;
+	return is_directory_change(data)
+		&& (buffer_size == 0);
+}
+
+bool DirectoryChanges::is_valid_directory_change(const PortData& data) const
+{
+	const auto buffer_size = data.value;
+	return is_directory_change(data)
+		&& (buffer_size != 0);
+}
+
 DirectoryChangesResults DirectoryChanges::wait_impl(
 	WinDWORD milliseconds, std::error_code& ec)
 {
@@ -120,13 +134,14 @@ DirectoryChangesResults DirectoryChanges::wait_impl(
 		return DirectoryChangesResults();
 	}
 	// Check if data is coming from our directory, since we do not
-	// own I/O Completion Port and it can be used for other purpose
-	if (!is_directory_change(*data))
+	// own I/O Completion Port and it can be used for other purpose.
+	// Also we check whether there is actual data (i.e, no buffer overflow)
+	if (!is_valid_directory_change(*data))
 	{
 		return DirectoryChangesResults(std::move(*data));
 	}
-	return DirectoryChangesResults(DirectoryChangesRange(
-		buffer_, static_cast<std::size_t>(data->value)));
+	return DirectoryChangesResults(
+		DirectoryChangesRange(buffer_, std::move(*data)));
 }
 
 DirectoryChangesResults DirectoryChanges::get(std::error_code& ec)

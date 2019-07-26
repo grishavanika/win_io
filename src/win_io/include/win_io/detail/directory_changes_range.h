@@ -1,6 +1,7 @@
 #pragma once
 #include <win_io/detail/win_types.h>
 #include <win_io/detail/cpp17_integration.h>
+#include <win_io/detail/io_completion_port_data.h>
 
 #include <iterator>
 
@@ -35,9 +36,10 @@ namespace wi
 			// (`buffer` is DWORD-aligned, variable length array of
 			// `FILE_NOTIFY_INFORMATION` structs)
 			explicit DirectoryChangesRange(const void* buffer, std::size_t size);
+			explicit DirectoryChangesRange(const void* buffer, PortData port_changes);
 			explicit DirectoryChangesRange();
 
-			bool has_any() const;
+			bool has_changes() const;
 
 			iterator begin();
 			const_iterator begin() const;
@@ -66,6 +68,7 @@ namespace wi
 
 			explicit DirectoryChangesIterator();
 			explicit DirectoryChangesIterator(const void* buffer, const std::size_t max_size);
+			explicit DirectoryChangesIterator(const void* buffer, PortData port_changes);
 
 			DirectoryChangesIterator operator++();
 			DirectoryChangesIterator operator++(int);
@@ -122,12 +125,18 @@ namespace wi
 		{
 		}
 
+		/*explicit*/ inline DirectoryChangesRange::DirectoryChangesRange(
+			const void* buffer, PortData port_changes)
+			: DirectoryChangesRange(buffer, static_cast<std::size_t>(port_changes.value))
+		{
+		}
+
 		/*explicit*/ inline DirectoryChangesRange::DirectoryChangesRange()
 			: DirectoryChangesRange(nullptr, 0)
 		{
 		}
 
-		inline bool DirectoryChangesRange::has_any() const
+		inline bool DirectoryChangesRange::has_changes() const
 		{
 			return (size_ != 0) && (buffer_ != nullptr);
 		}

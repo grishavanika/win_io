@@ -24,12 +24,17 @@ namespace
 		return change;
 	}
 
-	std::size_t GetInfoSize(const void* buffer)
+	std::size_t GetInfoSize(const FILE_NOTIFY_INFORMATION& fi)
 	{
 		std::size_t size = 0;
 		size += sizeof(FILE_NOTIFY_INFORMATION) - sizeof(DWORD);
-		size += GetInfo(buffer).FileNameLength;
+		size += fi.FileNameLength;
 		return size;
+	}
+
+	std::size_t GetInfoSize(const void* buffer)
+	{
+		return GetInfoSize(GetInfo(buffer));
 	}
 
 } // namespace
@@ -60,6 +65,11 @@ namespace
 	}
 }
 
+/*explicit*/ DirectoryChangesIterator::DirectoryChangesIterator(
+	const void* buffer, PortData port_changes)
+	: DirectoryChangesIterator(buffer, static_cast<std::size_t>(port_changes.value))
+{
+}
 
 const DirectoryChange DirectoryChangesIterator::operator*()
 {
@@ -93,8 +103,8 @@ void DirectoryChangesIterator::move_to_next()
 	assert(current_);
 	assert(consumed_size_ <= max_size_);
 
-	consumed_size_ += GetInfoSize(current_);
 	const auto& info = GetInfo(current_);
+	consumed_size_ += GetInfoSize(info);
 	const bool has_more = (info.NextEntryOffset != 0);
 	if (!has_more)
 	{

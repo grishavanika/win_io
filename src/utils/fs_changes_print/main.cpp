@@ -344,12 +344,6 @@ void HandleNonDirectoryResults(const Options& options, const DirectoryChangesRes
 			continue;
 		}
 
-		if (!changes->has_any())
-		{
-			HandleError(options, "Too small buffer for all changes");
-			continue;
-		}
-
 		PrintChanges(*changes);
 	}
 }

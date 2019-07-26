@@ -73,9 +73,18 @@ namespace wi
 			// it's possible to construct `DirectoryChangesRange` from `buffer()`
 			bool is_directory_change(const PortData& data) const;
 
+			// Checks whether `data` relates to this directory changes
+			// and has no actual changes because of system's buffer overflow
+			bool has_buffer_overflow(const PortData& data) const;
+
+			// Returns true when `data` has non-empty set of changes
+			// for this instance (i.e, DirectoryChangesRange contains
+			// at least one item)
+			bool is_valid_directory_change(const PortData& data) const;
+
 			const void* buffer() const;
 
-			// Call after each successfull wait for event
+			// Call after each successful wait for event
 			// (or after `DirectoryChanges` instance creation).
 			// Be sure to call only after processing data stored
 			// in the `buffer` since system can write into it

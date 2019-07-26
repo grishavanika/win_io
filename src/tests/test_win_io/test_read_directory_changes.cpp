@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+
 #include <win_io/detail/read_directory_changes.h>
 
 #include "file_utils.h"
@@ -293,4 +294,49 @@ TEST_F(DirectoryChangesTest, Waiting_From_Multiple_Threads)
 	}
 
 	ASSERT_TRUE(AreChangesEqual(created_changes, detected_changes));
+}
+
+TEST_F(DirectoryChangesTest, Detects_Buffer_Overflow_With_No_Errors_Flag_Set)
+{
+	// Amount of space one change takes in the buffer
+	// with "zero" file name length.
+	const std::size_t k_base_change_size = sizeof(FILE_NOTIFY_INFORMATION) - sizeof(DWORD);
+	const std::size_t k_iterations_to_fill_buffer =
+		(sizeof(buffer_) / k_base_change_size);
+	static_assert(k_iterations_to_fill_buffer != 0, "");
+	
+	start_with_filters(FILE_NOTIFY_CHANGE_FILE_NAME);
+
+	for (size_t i = 0; i < k_iterations_to_fill_buffer; ++i)
+	{
+		const auto file = create_random_file();
+		delete_file(file);
+	}
+
+	std::error_code ec;
+	bool has_buffer_overflow = false;
+	for (int i = 0; i < 5/*try few times*/; ++i)
+	{
+		while (auto data = io_port_.query(ec))
+		{
+			ASSERT_TRUE(dir_changes_->is_directory_change(*data));
+			if (dir_changes_->has_buffer_overflow(*data))
+			{
+				has_buffer_overflow = true;
+				// No error detected
+				ASSERT_FALSE(ec);
+				// No actual changes
+				DirectoryChangesRange changes(dir_changes_->buffer(), *data);
+				const std::size_t count = static_cast<std::size_t>(
+					std::distance(changes.begin(), changes.end()));
+				ASSERT_EQ(0u, count);
+				break;
+			}
+			else
+			{
+				dir_changes_->start_watch();
+			}
+		}
+	}
+	ASSERT_TRUE(has_buffer_overflow);
 }
