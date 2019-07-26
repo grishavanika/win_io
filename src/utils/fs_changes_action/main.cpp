@@ -46,30 +46,23 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
 		{
 			return io::DirectoryChangesRange(buffer, pd);
 		})
-		| rxo::tap([&](io::DirectoryChangesRange changes)
+		| rxo::flat_map([](io::DirectoryChangesRange range)
 		{
-			for (const auto change : changes)
-			{
-				std::wcout.write(change.name.data(), change.name.size());
-				std::wcout << L"\n";
-			}
-			std::wcout.flush();
-
-			// #XXX: should be as separate action
-			dir_changes.start_watch();
+			return rx::observable<>::iterate(range);
 		})
 		| rxo::as_dynamic();
 
-	// #XXX: how to provide subscriber ?
-	// Convert cold to hot ?
-	pipeline.subscribe([](io::DirectoryChangesRange) {});
-
-
-	// Start watching
-	dir_changes.start_watch();
+	pipeline.subscribe(
+		[](io::DirectoryChange change)
+	{
+		std::wcout.write(change.name.data(), change.name.size());
+		std::wcout << std::endl;
+	});
 
 	while (true)
 	{
+		dir_changes.start_watch();
+
 		std::error_code ec;
 		auto data = io_service.get(ec);
 		if (data)
