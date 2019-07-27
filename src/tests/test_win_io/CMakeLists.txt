@@ -7,6 +7,6 @@ add_executable(${exe_name} ${${exe_name}_files})
 set_all_warnings(${exe_name} PUBLIC)
 
 target_link_libraries(${exe_name} PRIVATE win_io)
-target_link_libraries(${exe_name} PRIVATE gtest_all)
+target_link_libraries(${exe_name} PRIVATE GTest_Integrated)
 target_link_libraries(${exe_name} PRIVATE string-view-lite)
 target_link_libraries(${exe_name} PRIVATE optional-lite)

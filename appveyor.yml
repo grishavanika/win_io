@@ -6,7 +6,7 @@ environment:
     # TODO: Clang does not integrated well for Visual Studio 2017
     #- compiler: clang
     - compiler: cl
-    - compiler: gcc
+    #- compiler: gcc
 
 configuration:
   #- Debug
@@ -17,6 +17,13 @@ platform:
   # (different MinGW installations needed)
   #- x86
   - x64
+
+cache: c:\tools\vcpkg\installed\
+
+install:
+  - cd C:\Tools\vcpkg
+  - vcpkg install gtest:x64-windows
+  - vcpkg install rxcpp:x64-windows
 
 build_script:
   # Setup Python
@@ -29,7 +36,7 @@ build_script:
   - set path=%path%;C:\mingw-w64\x86_64-7.2.0-posix-seh-rt_v5-rev1\mingw64\bin
   # Configure & build
   - cd tools
-  - python generate_project.py --compiler=%compiler% --platform=%platform%
+  - python generate_project.py --compiler=%compiler% --platform=%platform% -DCMAKE_TOOLCHAIN_FILE=c:/tools/vcpkg/scripts/buildsystems/vcpkg.cmake
   # TODO: let's generate_project.py gives the name to us
   - cd ../build_%compiler%_%platform%
   - cmake --build . --config %configuration%
