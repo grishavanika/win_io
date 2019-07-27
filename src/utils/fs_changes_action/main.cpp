@@ -2,8 +2,10 @@
 #include <win_io/detail/io_completion_port.h>
 #include <win_io/detail/read_directory_changes.h>
 
-#include <string>
 #include <rxcpp/rx.hpp>
+
+#include <sstream>
+#include <string>
 
 #include <Windows.h>
 
@@ -13,6 +15,51 @@ namespace rx = rxcpp;
 namespace rxu = rxcpp::util;
 namespace rxs = rxcpp::subjects;
 namespace rxo = rxcpp::operators;
+
+struct DirectoryEvent
+{
+	io::DirectoryChanges* dir_watcher = nullptr;
+	io::DirectoryChangesRange changes;
+};
+
+struct DirectoryChange
+{
+	io::DirectoryChanges* dir_watcher = nullptr;
+	io::DirectoryChange data;
+};
+
+struct UIModel
+{
+	std::wstring page;
+};
+
+struct ActionMeta
+{
+	const DWORD action;
+	const wchar_t* const title;
+};
+
+const ActionMeta k_actions[] =
+{
+	{FILE_ACTION_ADDED,             L"a"},
+	{FILE_ACTION_REMOVED,           L"r"},
+	{FILE_ACTION_MODIFIED,          L"m"},
+	{FILE_ACTION_RENAMED_OLD_NAME,  L"o"},
+	{FILE_ACTION_RENAMED_NEW_NAME,  L"n"},
+};
+
+nonstd::wstring_view GetActionTitle(DWORD action_id)
+{
+	for (const auto& action : k_actions)
+	{
+		if (action.action == action_id)
+		{
+			return action.title;
+		}
+	}
+	assert(false);
+	return {};
+}
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
 {
@@ -43,58 +90,51 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
 
 	using namespace rxo;
 
-	auto dir_changes = io_changes
+	auto dir_events = io_changes
 		.filter([&](io::PortData pd)
 		{
 			return dir_watcher.is_valid_directory_change(pd);
 		})
 		.map([&](io::PortData pd)
 		{
-			return rx::observable<>::just(
-				io::DirectoryChangesRange(buffer, pd));
+			return DirectoryEvent{&dir_watcher, io::DirectoryChangesRange(buffer, pd)};
 		});
 	
-	auto dir_notifications = dir_changes
-		.merge_transform([](rx::observable<io::DirectoryChangesRange> changes)
+	auto dir_changes = dir_events
+		.merge_transform([](DirectoryEvent event)
 		{
-			return changes.merge_transform([](io::DirectoryChangesRange range)
-			{
-				return rx::observable<>::iterate(range);
-			});
+			return rx::observable<>::iterate(event.changes)
+				.transform([dir_watcher = event.dir_watcher]
+					(io::DirectoryChange change)
+				{
+					return DirectoryChange{dir_watcher, change};
+				});
 		});
 
-	struct noop {};
-
-	auto draw_ui = dir_notifications
-		.tap([](io::DirectoryChange change)
+	auto collect_ui = dir_changes
+		.transform([](DirectoryChange change)
 		{
-			std::wcout.write(change.name.data(), change.name.size());
-			std::wcout << L"\n";
-		})
-		.transform([](io::DirectoryChange)
-			{ return noop(); });
+			std::wstringstream data;
+			data << L"+" << GetActionTitle(change.data.action) << ": ";
+			data.write(change.data.name.data(), change.data.name.size());
+			data << L"\n";
+			return UIModel{data.str()};
+		});
 
-	auto flush_ui = dir_changes
-		// #XXX: how to ignore parameter ?
-		.tap([&](rx::observable<io::DirectoryChangesRange>)
-		{
-			std::wcout.flush();
-		})
-		.transform([](rx::observable<io::DirectoryChangesRange>)
-			{ return noop(); });
+	collect_ui.subscribe([](UIModel data)
+	{
+		std::wcout << data.page;
+	});
 
-	auto repeat_watch = dir_changes
-		.tap([&](rx::observable<io::DirectoryChangesRange>)
-		{
-			dir_watcher.start_watch();
-		})
-		.transform([](rx::observable<io::DirectoryChangesRange>)
-			{ return noop(); });
+	dir_events.subscribe([](DirectoryEvent event)
+	{
+		// Flush pending UI change.
+		// (Singe event may produce multiple UI changes).
+		std::wcout << std::wstring(20, L'-') << std::endl;
 
-	draw_ui
-		.merge(flush_ui)
-		.merge(repeat_watch)
-		.subscribe([](noop) {});
+		// Listen to new changes.
+		event.dir_watcher->start_watch();
+	});
 
 	/////////////////////////////////////////////
 	dir_watcher.start_watch();
