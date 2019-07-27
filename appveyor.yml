@@ -37,7 +37,7 @@ build_script:
   # Configure & build
   - cd /d %APPVEYOR_BUILD_FOLDER%
   - cd tools
-  - python generate_project.py --compiler=%compiler% --platform=%platform% -DCMAKE_TOOLCHAIN_FILE=c:/tools/vcpkg/scripts/buildsystems/vcpkg.cmake
+  - python generate_project.py --compiler=%compiler% --platform=%platform% --vcpkg=c:/tools/vcpkg/scripts/buildsystems/vcpkg.cmake
   # TODO: let's generate_project.py gives the name to us
   - cd ../build_%compiler%_%platform%
   - cmake --build . --config %configuration%
