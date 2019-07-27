@@ -84,22 +84,41 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
 		| FILE_NOTIFY_CHANGE_CREATION
 		| FILE_NOTIFY_CHANGE_SECURITY;
 
-	DWORD buffer[16 * 1024];
-	io::DirectoryChanges dir_watcher(L"C:\\", buffer, sizeof(buffer)
-		, true/*watch_sub_tree*/, k_filters, io_service);
+	DWORD buffer_c[16 * 1024];
+	io::DirectoryChanges dir_watcher_c(L"C:\\", buffer_c, sizeof(buffer_c)
+		, true/*watch sub tree*/, k_filters, io_service);
+	DWORD buffer_d[16 * 1024];
+	io::DirectoryChanges dir_watcher_d(L"D:\\", buffer_d, sizeof(buffer_d)
+		, true/*watch sub tree*/, k_filters, io_service);
 
-	using namespace rxo;
+	io::DirectoryChanges* dirs[] = {&dir_watcher_c, &dir_watcher_d};
 
 	auto dir_events = io_changes
-		.filter([&](io::PortData pd)
+		.group_by([&](io::PortData pd)
 		{
-			return dir_watcher.is_valid_directory_change(pd);
+			for (io::DirectoryChanges* dir : dirs)
+			{
+				if (dir->is_valid_directory_change(pd))
+				{
+					return dir;
+				}
+			}
+			return static_cast<io::DirectoryChanges*>(nullptr);
 		})
-		.map([&](io::PortData pd)
+		.filter([](rx::grouped_observable<io::DirectoryChanges*, io::PortData> group)
 		{
-			return DirectoryEvent{&dir_watcher, io::DirectoryChangesRange(buffer, pd)};
+			io::DirectoryChanges* dir = group.get_key();
+			return (dir != nullptr);
+		})
+		.merge_transform([](rx::grouped_observable<io::DirectoryChanges*, io::PortData> group)
+		{
+			io::DirectoryChanges* dir = group.get_key();
+			return group.transform([dir](io::PortData pd)
+			{
+				return DirectoryEvent{dir, io::DirectoryChangesRange(dir->buffer(), pd)};
+			});
 		});
-	
+
 	auto dir_changes = dir_events
 		.merge_transform([](DirectoryEvent event)
 		{
@@ -137,7 +156,11 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
 	});
 
 	/////////////////////////////////////////////
-	dir_watcher.start_watch();
+	// Start watching initial changes
+	for (io::DirectoryChanges* dir : dirs)
+	{
+		dir->start_watch();
+	}
 
 	while (true)
 	{
