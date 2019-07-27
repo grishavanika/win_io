@@ -21,7 +21,7 @@ platform:
 cache: c:\tools\vcpkg\installed\
 
 install:
-  - cd C:\Tools\vcpkg
+  - cd /d C:\Tools\vcpkg
   - vcpkg install gtest:x64-windows
   - vcpkg install rxcpp:x64-windows
 
@@ -35,6 +35,7 @@ build_script:
   - set path=%path:C:\Program Files\Git\usr\bin;=%
   - set path=%path%;C:\mingw-w64\x86_64-7.2.0-posix-seh-rt_v5-rev1\mingw64\bin
   # Configure & build
+  - cd /d %APPVEYOR_BUILD_FOLDER%
   - cd tools
   - python generate_project.py --compiler=%compiler% --platform=%platform% -DCMAKE_TOOLCHAIN_FILE=c:/tools/vcpkg/scripts/buildsystems/vcpkg.cmake
   # TODO: let's generate_project.py gives the name to us
