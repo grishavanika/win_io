@@ -22,6 +22,8 @@ cache: c:\tools\vcpkg\installed\
 
 install:
   - cd /d C:\Tools\vcpkg
+  - git pull
+  - .\bootstrap-vcpkg.bat
   - vcpkg install gtest:x64-windows
   - vcpkg install rxcpp:x64-windows
 
