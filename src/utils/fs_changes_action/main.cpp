@@ -55,43 +55,46 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
 		});
 	
 	auto dir_notifications = dir_changes
-		.flat_map([](rx::observable<io::DirectoryChangesRange> changes)
+		.merge_transform([](rx::observable<io::DirectoryChangesRange> changes)
 		{
-			return changes.flat_map([](io::DirectoryChangesRange range)
+			return changes.merge_transform([](io::DirectoryChangesRange range)
 			{
 				return rx::observable<>::iterate(range);
 			});
 		});
+
+	struct noop {};
 
 	auto draw_ui = dir_notifications
 		.tap([](io::DirectoryChange change)
 		{
 			std::wcout.write(change.name.data(), change.name.size());
 			std::wcout << L"\n";
-		});
+		})
+		.transform([](io::DirectoryChange)
+			{ return noop(); });
 
 	auto flush_ui = dir_changes
 		// #XXX: how to ignore parameter ?
 		.tap([&](rx::observable<io::DirectoryChangesRange>)
 		{
 			std::wcout.flush();
-		});
+		})
+		.transform([](rx::observable<io::DirectoryChangesRange>)
+			{ return noop(); });
 
 	auto repeat_watch = dir_changes
-		// #XXX: how to ignore parameter ?
 		.tap([&](rx::observable<io::DirectoryChangesRange>)
 		{
 			dir_watcher.start_watch();
-		});
-	
-	/////////////////////////////////////////////
-	// #XXX: how to just subscribe with no-op ?
-	// Make them hot ?
-	draw_ui.subscribe([](io::DirectoryChange) {});
-	flush_ui.subscribe([](rx::observable<io::DirectoryChangesRange>)
-		{ std::wcout << L"on changes" << std::endl; });
-	repeat_watch.subscribe([](rx::observable<io::DirectoryChangesRange>)
-		{ std::wcout << L"on repeat" << std::endl; });
+		})
+		.transform([](rx::observable<io::DirectoryChangesRange>)
+			{ return noop(); });
+
+	draw_ui
+		.merge(flush_ui)
+		.merge(repeat_watch)
+		.subscribe([](noop) {});
 
 	/////////////////////////////////////////////
 	dir_watcher.start_watch();
