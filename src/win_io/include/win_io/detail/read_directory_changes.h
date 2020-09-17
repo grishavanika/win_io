@@ -23,16 +23,11 @@ namespace wi
         explicit DirectoryChangesResults(DirectoryChangesRange dir_changes);
         explicit DirectoryChangesResults(PortData port_changes);
 
-        bool has_changes() const;
-
-        DirectoryChangesRange* directory_changes();
         const DirectoryChangesRange* directory_changes() const;
-
-        PortData* port_changes();
         const PortData* port_changes() const;
 
     private:
-        std::variant<DirectoryChangesRange, PortData> data_;
+        std::variant<std::monostate, DirectoryChangesRange, PortData> data_;
     };
 
     // Low-level wrapper around `::ReadDirectoryChangesW()`
@@ -73,27 +68,6 @@ namespace wi
         DirectoryChanges& operator=(DirectoryChanges&& rhs) noexcept;
         ~DirectoryChanges();
 
-        WinHANDLE directory_handle() const;
-
-        // Useful when single I/O completion port is used for
-        // tracking multiple directories changes.
-        // You will need to wait for I/O event and then check
-        // from which directory it coming.
-        // Once you will need to process data,
-        // it's possible to construct `DirectoryChangesRange` from `buffer()`
-        bool is_directory_change(const PortData& data) const;
-
-        // Checks whether `data` relates to this directory changes
-        // and has no actual changes because of system's buffer overflow
-        bool has_buffer_overflow(const PortData& data) const;
-
-        // Returns true when `data` has non-empty set of changes
-        // for this instance (i.e, DirectoryChangesRange contains
-        // at least one item)
-        bool is_valid_directory_change(const PortData& data) const;
-
-        const void* buffer() const;
-
         // Call after each successful wait for event
         // (or after `DirectoryChanges` instance creation).
         // Be sure to call only after processing data stored
@@ -101,13 +75,36 @@ namespace wi
         // while you are reading from.
         void start_watch(std::error_code& ec);
 
+        // Blocking call. Wait for changes.
         DirectoryChangesResults get(std::error_code& ec);
 
+        // Non-blocking call.
         DirectoryChangesResults query(std::error_code& ec);
-            
+
         template<typename Rep, typename Period>
         DirectoryChangesResults wait_for(std::chrono::duration<Rep, Period> time
             , std::error_code& ec);
+
+        WinHANDLE directory_handle() const;
+
+        // Useful when single I/O completion port is used for
+        // tracking multiple directories changes.
+        // You will need to wait for I/O event and then check
+        // from which directory it coming.
+        // Once you will need to process data,
+        // it's possible to construct `DirectoryChangesRange` from `buffer()`.
+        bool is_directory_change(const PortData& data) const;
+
+        // Checks whether `data` relates to this directory changes
+        // and has no actual changes because of system's buffer overflow.
+        bool has_buffer_overflow(const PortData& data) const;
+
+        // Returns true when `data` has non-empty set of changes
+        // for this instance (i.e, DirectoryChangesRange contains
+        // at least one item).
+        bool is_valid_directory_change(const PortData& data) const;
+
+        const void* buffer() const;
 
     private:
         static WinHANDLE open_directory(const wchar_t* directory_name, std::error_code& ec);
@@ -153,24 +150,9 @@ namespace wi
     {
     }
 
-    inline bool DirectoryChangesResults::has_changes() const
-    {
-        return (data_.index() != std::variant_npos);
-    }
-
-    inline DirectoryChangesRange* DirectoryChangesResults::directory_changes()
-    {
-        return std::get_if<DirectoryChangesRange>(&data_);
-    }
-
     inline const DirectoryChangesRange* DirectoryChangesResults::directory_changes() const
     {
         return std::get_if<DirectoryChangesRange>(&data_);
-    }
-
-    inline PortData* DirectoryChangesResults::port_changes()
-    {
-        return std::get_if<PortData>(&data_);
     }
 
     inline const PortData* DirectoryChangesResults::port_changes() const

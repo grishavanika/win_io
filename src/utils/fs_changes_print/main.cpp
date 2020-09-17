@@ -305,7 +305,7 @@ void HandleNonDirectoryResults(const Options& options, const DirectoryChangesRes
         ErrorStream() << "Unexpected I/O port event" << "\n";
         (void)port_changes;
     }
-    else if (!results.has_changes())
+    else if (!results.directory_changes())
     {
         ErrorStream() << "Unexpected get without any changes" << "\n";
     }
