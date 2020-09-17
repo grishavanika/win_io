@@ -1,14 +1,14 @@
 include(CMakePrintHelpers)
 
-macro(set_cpp17_standard)
+macro(set_cpp20_standard)
 	set(CXX_STANDARD_REQUIRED ON)
-	set(CMAKE_CXX_STANDARD 17)
+	set(CMAKE_CXX_STANDARD 20)
 
 	# And `CMAKE_CXX_STANDARD` does not work for Clang on Windows.
 	# Also, MSVC's /std switch needs to be set
 	# (for proper detection of _HAS_CXX17 in std headers)
 	if (clang_on_msvc)
-		set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++1z /std:c++17")
+		set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++2a /std:c++latest")
 	endif ()
 endmacro()
 

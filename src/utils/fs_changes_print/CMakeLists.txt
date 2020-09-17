@@ -6,11 +6,11 @@ add_executable(${exe_name} ${${exe_name}_files})
 
 # Enable Unicode Character Set
 target_compile_definitions(${exe_name} PRIVATE
-	UNICODE _UNICODE)
+    UNICODE _UNICODE)
 
 if (${gcc})
-	# Make GCC aware about wmain()
-	set_target_properties(${exe_name} PROPERTIES LINK_FLAGS -municode)
+    # Make GCC aware about wmain()
+    set_target_properties(${exe_name} PROPERTIES LINK_FLAGS -municode)
 endif()
 
 set_all_warnings(${exe_name} PRIVATE)

@@ -6,36 +6,36 @@
 
 namespace wi
 {
-	namespace coro
-	{
-		using IoCompletionPort = ::wi::detail::IoCompletionPort;
+    namespace coro
+    {
+        using IoCompletionPort = ::wi::detail::IoCompletionPort;
 
-		class IoScheduler
-		{
-		public:
-			IoScheduler(IoCompletionPort& io_port);
-			~IoScheduler();
+        class IoScheduler
+        {
+        public:
+            IoScheduler(IoCompletionPort& io_port);
+            ~IoScheduler();
 
-			std::size_t poll();
-			std::size_t poll_one();
+            std::size_t poll();
+            std::size_t poll_one();
 
-			std::size_t run();
-			std::size_t run_one();
+            std::size_t run();
+            std::size_t run_one();
 
-			// Should be used together with co_await.
-			// Suspends coroutine until any IoCompletionPort data
-			// becomes available
-			IoTask get();
+            // Should be used together with co_await.
+            // Suspends coroutine until any IoCompletionPort data
+            // becomes available
+            IoTask get();
 
-		private:
-			friend class IoTask;
-			void add(IoTask& task);
+        private:
+            friend class IoTask;
+            void add(IoTask& task);
 
-		private:
-			IoCompletionPort& io_port_;
-			detail::IntrusiveQueue<IoTask> tasks_;
-		};
+        private:
+            IoCompletionPort& io_port_;
+            detail::IntrusiveQueue<IoTask> tasks_;
+        };
 
-	} // namespace coro
+    } // namespace coro
 } // namespace wi
 

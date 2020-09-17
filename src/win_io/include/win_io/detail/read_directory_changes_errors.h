@@ -3,14 +3,14 @@
 
 namespace wi
 {
-	namespace detail
-	{
+    namespace detail
+    {
 
-		class DirectoryChangesError : public Error
-		{
-		public:
-			using Error::Error;
-		};
+        class DirectoryChangesError : public Error
+        {
+        public:
+            using Error::Error;
+        };
 
-	} // namespace detail
+    } // namespace detail
 } // namespace wi

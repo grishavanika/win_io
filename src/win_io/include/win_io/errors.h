@@ -3,11 +3,11 @@
 
 namespace wi
 {
-	
-	class Error	: public std::system_error
-	{
-	public:
-		using std::system_error::system_error;
-	};
-	
+    
+    class Error    : public std::system_error
+    {
+    public:
+        using std::system_error::system_error;
+    };
+    
 } // namespace wi

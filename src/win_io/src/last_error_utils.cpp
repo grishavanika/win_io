@@ -4,11 +4,11 @@
 
 namespace wi
 {
-	namespace detail
-	{
-		WinDWORD GetLastWinError()
-		{
-			return ::GetLastError();
-		}
-	}
+    namespace detail
+    {
+        WinDWORD GetLastWinError()
+        {
+            return ::GetLastError();
+        }
+    }
 }
