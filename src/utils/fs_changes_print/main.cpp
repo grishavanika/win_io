@@ -313,24 +313,42 @@ void HandleNonDirectoryResults(const Options& options, const DirectoryChangesRes
     throw PrintChangesError("Unreachable code");
 }
 
-[[noreturn]] void WatchForever(const Options& options)
+void WatchForever(const Options& options)
 {
+    std::error_code ec;
+    auto port = IoCompletionPort::make(1, ec);
+    if (!port)
+    {
+        HandleError(options, "Failed to create IoCompletionPort", ec);
+        return;
+    }
+
     DWORD buffer[16 * 1024];
-    IoCompletionPort port;
-    DirectoryChanges dir_changes(options.directory, buffer, sizeof(buffer)
-        , options.watch_sub_tree, options.notify_filter, port);
+    auto dir_changes = DirectoryChanges::make(
+        options.directory
+        , buffer
+        , sizeof(buffer)
+        , options.watch_sub_tree
+        , options.notify_filter
+        , *port
+        , 1/*dir key*/
+        , ec);
+    if (!dir_changes)
+    {
+        HandleError(options, "Failed to create DirectoryChanges", ec);
+        return;
+    }
 
     while (true)
     {
-        std::error_code ec;
-        dir_changes.start_watch(ec);
+        dir_changes->start_watch(ec);
         if (ec)
         {
             HandleError(options, "Failed to start watching", ec);
             continue;
         }
 
-        const DirectoryChangesResults results = dir_changes.get(ec);
+        const DirectoryChangesResults results = dir_changes->get(ec);
         if (ec)
         {
             HandleError(options, "Failed to get changes", ec);
@@ -392,15 +410,7 @@ int wmain(int argc, wchar_t* argv[])
         PrettyPrintOptions(exe_path, options);
     }
 
-    try
-    {
-        WatchForever(options);
-    }
-    catch (const std::exception& e)
-    {
-        ErrorStream() << "Fatal error: " << e.what() << "\n";
-        return EXIT_FAILURE;
-    }
+    WatchForever(options);
 }
 
 #if (__clang__)

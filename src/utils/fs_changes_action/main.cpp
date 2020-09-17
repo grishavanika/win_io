@@ -69,7 +69,9 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
         (void)freopen_s(&unused, "CONOUT$", "w", stdout);
     }
 
-    io::IoCompletionPort io_service(1/*threads count*/);
+    std::error_code ec;
+    auto io_service = io::IoCompletionPort::make(1/*threads count*/, ec);
+    assert(ec);
     rxs::subject<io::PortData> io_port_data;
     rx::observable<io::PortData> io_changes = io_port_data.get_observable();
     auto io_port = io_port_data.get_subscriber();
@@ -85,13 +87,14 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
         | FILE_NOTIFY_CHANGE_SECURITY;
 
     DWORD buffer_c[16 * 1024];
-    io::DirectoryChanges dir_watcher_c(L"C:\\", buffer_c, sizeof(buffer_c)
-        , true/*watch sub tree*/, k_filters, io_service);
+    auto dir_watcher_c = io::DirectoryChanges::make(L"C:\\", buffer_c, sizeof(buffer_c)
+        , true/*watch sub tree*/, k_filters, *io_service, 1/*dir_key*/, ec);
+    assert(ec);
     DWORD buffer_d[16 * 1024];
-    io::DirectoryChanges dir_watcher_d(L"D:\\", buffer_d, sizeof(buffer_d)
-        , true/*watch sub tree*/, k_filters, io_service);
+    auto dir_watcher_d = io::DirectoryChanges::make(L"D:\\", buffer_d, sizeof(buffer_d)
+        , true/*watch sub tree*/, k_filters, *io_service, 2/*dir_key*/, ec);
 
-    io::DirectoryChanges* dirs[] = {&dir_watcher_c, &dir_watcher_d};
+    io::DirectoryChanges* dirs[] = {&*dir_watcher_c, &*dir_watcher_d};
 
     auto dir_events = io_changes
         .group_by([&](io::PortData pd)
@@ -152,20 +155,24 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
         std::wcout << std::wstring(20, L'-') << std::endl;
 
         // Listen to new changes.
-        event.dir_watcher->start_watch();
+        // #XXX: errors should be pushed to pipeline
+        std::error_code ec;
+        event.dir_watcher->start_watch(ec);
+        assert(ec);
     });
 
     /////////////////////////////////////////////
     // Start watching initial changes
     for (io::DirectoryChanges* dir : dirs)
     {
-        dir->start_watch();
+        // #XXX: errors should be pushed to pipeline
+        dir->start_watch(ec);
+        assert(ec);
     }
 
     while (true)
     {
-        std::error_code ec;
-        auto data = io_service.get(ec);
+        auto data = io_service->get(ec);
         if (data)
         {
             io_port.on_next(std::move(*data));

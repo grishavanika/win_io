@@ -16,4 +16,3 @@ endif()
 set_all_warnings(${exe_name} PRIVATE)
 
 target_link_libraries(${exe_name} PRIVATE win_io)
-target_link_libraries(${exe_name} PRIVATE string-view-lite)

@@ -1,4 +1,5 @@
 #include <win_io/detail/io_completion_port.h>
+#include <win_io/detail/last_error_utils.h>
 
 #include <limits>
 
@@ -9,38 +10,59 @@
 using namespace wi;
 using namespace detail;
 
-IoCompletionPort::IoCompletionPort()
-    // Do not limit number of threads by default
-    : IoCompletionPort((std::numeric_limits<std::uint32_t>::max)())
+/*static*/ std::optional<IoCompletionPort> IoCompletionPort::make(std::error_code& ec) noexcept
+{
+    // As many concurrently running threads as there are processors in the system.
+    return make(0, ec);
+}
+
+/*static*/ std::optional<IoCompletionPort> IoCompletionPort::make(std::uint32_t concurrent_threads_hint
+    , std::error_code& ec) noexcept
+{
+    std::optional<IoCompletionPort> value;
+
+    IoCompletionPort& o = value.emplace();
+    o.io_port_ = ::CreateIoCompletionPort(INVALID_HANDLE_VALUE
+        , nullptr // Create new one.
+        , 0       // No completion key yet.
+        , concurrent_threads_hint);
+    if (o.io_port_ == nullptr)
+    {
+        ec = make_last_error_code();
+        return std::nullopt;
+    }
+
+    return value;
+}
+
+IoCompletionPort::IoCompletionPort(IoCompletionPort&& rhs) noexcept
+    : io_port_(std::exchange(rhs.io_port_, nullptr))
 {
 }
 
-IoCompletionPort::IoCompletionPort(std::uint32_t concurrent_threads_hint)
-    : io_port_(nullptr)
+IoCompletionPort& IoCompletionPort::operator=(IoCompletionPort&& rhs) noexcept
 {
-    io_port_ = ::CreateIoCompletionPort(INVALID_HANDLE_VALUE
-        , nullptr // Create new one
-        , 0    // No completion key yet
-        , concurrent_threads_hint);
-
-    if (!io_port_)
+    if (this != &rhs)
     {
-        throw_last_error<IoCompletionPortError>("[Io] ::CreateIoCompletionPort()");
+        close();
+        io_port_ = std::exchange(rhs.io_port_, nullptr);
     }
+    return *this;
 }
 
 IoCompletionPort::~IoCompletionPort()
 {
-    const bool ok = !!::CloseHandle(io_port_);
-    assert(ok && "[Io] ::CloseHandle() on IoCompletionPort failed");
-    (void)ok;
+    close();
 }
 
-void IoCompletionPort::post(const PortData& data)
+void IoCompletionPort::close() noexcept
 {
-    std::error_code ec;
-    post(data, ec);
-    throw_if_error<IoCompletionPortError>("[Io] post() failed", ec);
+    if (io_port_)
+    {
+        [[maybe_unused]] const bool ok = !!::CloseHandle(io_port_);
+        assert(ok && "[Io] ::CloseHandle() on IoCompletionPort failed");
+        io_port_ = nullptr;
+    }
 }
 
 void IoCompletionPort::post(const PortData& data, std::error_code& ec)
@@ -59,33 +81,9 @@ std::optional<PortData> IoCompletionPort::get(std::error_code& ec)
     return wait_impl(INFINITE, ec);
 }
 
-PortData IoCompletionPort::get()
-{
-    std::error_code ec;
-    auto data = get(ec);
-    if (ec)
-    {
-        throw_error<IoCompletionPortQueryError>(ec, "[Io] post() failed"
-            , std::move(data));
-    }
-    return *data;
-}
-
 std::optional<PortData> IoCompletionPort::query(std::error_code& ec)
 {
     return wait_impl(0/*no blocking wait*/, ec);
-}
-
-std::optional<PortData> IoCompletionPort::query()
-{
-    std::error_code ec;
-    auto data = query(ec);
-    if (ec)
-    {
-        throw_error<IoCompletionPortQueryError>(ec, "[Io] query() failed"
-            , std::move(data));
-    }
-    return data;
 }
 
 void IoCompletionPort::associate_device(WinHANDLE device, WinULONG_PTR key
@@ -94,20 +92,10 @@ void IoCompletionPort::associate_device(WinHANDLE device, WinULONG_PTR key
     associate_with_impl(device, key, ec);
 }
 
-void IoCompletionPort::associate_device(WinHANDLE device, WinULONG_PTR key)
-{
-    associate_with_impl(device, key);
-}
-
 void IoCompletionPort::associate_socket(WinSOCKET socket, WinULONG_PTR key
     , std::error_code& ec)
 {
     associate_with_impl(socket, key, ec);
-}
-
-void IoCompletionPort::associate_socket(WinSOCKET socket, WinULONG_PTR key)
-{
-    associate_with_impl(socket, key);
 }
 
 std::optional<PortData> IoCompletionPort::wait_impl(
@@ -149,13 +137,6 @@ void IoCompletionPort::associate_with_impl(
         return;
     }
     assert(this_port == io_port_ && "[Io] Expected to have same Io Port");
-}
-
-void IoCompletionPort::associate_with_impl(WinHANDLE device, WinULONG_PTR key)
-{
-    std::error_code ec;
-    associate_with_impl(device, key, ec);
-    throw_if_error<IoCompletionPortError>("[Io] associate() failed", ec);
 }
 
 WinHANDLE IoCompletionPort::native_handle()

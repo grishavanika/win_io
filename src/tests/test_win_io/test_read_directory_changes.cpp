@@ -27,6 +27,10 @@ namespace
     protected:
         virtual void SetUp() override
         {
+            std::error_code ec;
+            io_port_ = IoCompletionPort::make(ec);
+            ASSERT_FALSE(ec);
+
             dir_name_ = make_temporary_dir();
 
             std::memset(buffer_, 0, sizeof(buffer_));
@@ -38,13 +42,16 @@ namespace
             remove_temporary_dir();
         }
 
-        void start_with_filters(WinDWORD filters)
+        void start_with_filters(WinDWORD filters, std::error_code& ec)
         {
-            dir_changes_ = std::make_unique<DirectoryChanges>(
+            dir_changes_ = DirectoryChanges::make(
                 dir_name_.c_str(), buffer_
                 , static_cast<WinDWORD>(sizeof(buffer_))
-                , false, filters, io_port_);
-            dir_changes_->start_watch();
+                , false, filters, *io_port_, 1, ec);
+            if (dir_changes_)
+            {
+                dir_changes_->start_watch(ec);
+            }
         }
 
         std::wstring create_random_file()
@@ -85,9 +92,9 @@ namespace
         }
 
     protected:
-        IoCompletionPort io_port_;
+        std::optional<IoCompletionPort> io_port_;
         DWORD buffer_[128];
-        std::unique_ptr<DirectoryChanges> dir_changes_;
+        std::optional<DirectoryChanges> dir_changes_;
         std::wstring dir_name_;
         std::vector<std::wstring> created_files_;
     };
@@ -112,9 +119,12 @@ namespace
 
 TEST_F(DirectoryChangesTest, IOPort_Receives_File_Added_Event_After_File_Creation)
 {
-    start_with_filters(FILE_NOTIFY_CHANGE_FILE_NAME);
+    std::error_code ec;
+    start_with_filters(FILE_NOTIFY_CHANGE_FILE_NAME, ec);
+    ASSERT_FALSE(ec);
     const auto file = create_random_file();
-    const auto results = dir_changes_->wait_for(10ms);
+    const auto results = dir_changes_->wait_for(10ms, ec);
+    ASSERT_FALSE(ec);
     const auto changes = results.directory_changes();
     ASSERT_TRUE(changes);
 
@@ -128,10 +138,12 @@ TEST_F(DirectoryChangesTest, IOPort_Receives_File_Added_Event_After_File_Creatio
 
 TEST_F(DirectoryChangesTest, Wait_On_Dir_Change_Can_Return_Other_Port_Data)
 {
-    start_with_filters(FILE_NOTIFY_CHANGE_FILE_NAME);
-
-    io_port_.post(PortData(10, 1, nullptr));
     std::error_code ec;
+    start_with_filters(FILE_NOTIFY_CHANGE_FILE_NAME, ec);
+    ASSERT_FALSE(ec);
+
+    io_port_->post(PortData(10, 1, nullptr), ec);
+    ASSERT_FALSE(ec);
     auto results = dir_changes_->wait_for(10ms, ec);
     ASSERT_FALSE(ec);
     // Wait resulted to getting PortData
@@ -143,7 +155,8 @@ TEST_F(DirectoryChangesTest, Wait_On_Dir_Change_Can_Return_Other_Port_Data)
 
     // Now, create & handle directory event
     const auto file = create_random_file();
-    results = dir_changes_->wait_for(10ms);
+    results = dir_changes_->wait_for(10ms, ec);
+    ASSERT_FALSE(ec);
     const auto changes = results.directory_changes();
     ASSERT_TRUE(changes);
 
@@ -157,11 +170,14 @@ TEST_F(DirectoryChangesTest, Wait_On_Dir_Change_Can_Return_Other_Port_Data)
 
 TEST_F(DirectoryChangesTest, Start_Needs_To_Be_Called_After_Successfull_Wait)
 {
-    start_with_filters(FILE_NOTIFY_CHANGE_FILE_NAME);
+    std::error_code ec;
+    start_with_filters(FILE_NOTIFY_CHANGE_FILE_NAME, ec);
+    ASSERT_FALSE(ec);
     const auto file = create_random_file();
 
     {
-        auto results = dir_changes_->query();
+        auto results = dir_changes_->query(ec);
+        ASSERT_FALSE(ec);
         const auto changes = results.directory_changes();
         ASSERT_TRUE(changes);
         const auto count = std::distance(changes->cbegin(), changes->cend());
@@ -176,11 +192,13 @@ TEST_F(DirectoryChangesTest, Start_Needs_To_Be_Called_After_Successfull_Wait)
         ASSERT_EQ(DirectoryChangesIterator(), end);
     }
 
-    dir_changes_->start_watch();
+    dir_changes_->start_watch(ec);
+    ASSERT_FALSE(ec);
     delete_file(file);
 
     {
-        auto results = dir_changes_->query();
+        auto results = dir_changes_->query(ec);
+        ASSERT_FALSE(ec);
         const auto changes = results.directory_changes();
         ASSERT_TRUE(changes);
         const auto count = std::distance(changes->cbegin(), changes->cend());
@@ -243,7 +261,9 @@ TEST_F(DirectoryChangesTest, Waiting_From_Multiple_Threads)
     std::vector<Change> detected_changes;
     std::vector<Change> created_changes;
 
-    start_with_filters(FILE_NOTIFY_CHANGE_FILE_NAME);
+    std::error_code ec_start;
+    start_with_filters(FILE_NOTIFY_CHANGE_FILE_NAME, ec_start);
+    ASSERT_FALSE(ec_start);
 
     auto waiter = [&]
     {
@@ -266,7 +286,8 @@ TEST_F(DirectoryChangesTest, Waiting_From_Multiple_Threads)
                 }
             }
 
-            dir_changes_->start_watch();
+            dir_changes_->start_watch(ec);
+            ASSERT_FALSE(ec);
         }
     };
 
@@ -304,7 +325,9 @@ TEST_F(DirectoryChangesTest, Detects_Buffer_Overflow_With_No_Errors_Flag_Set)
         (sizeof(buffer_) / k_base_change_size);
     static_assert(k_iterations_to_fill_buffer != 0, "");
     
-    start_with_filters(FILE_NOTIFY_CHANGE_FILE_NAME);
+    std::error_code ec;
+    start_with_filters(FILE_NOTIFY_CHANGE_FILE_NAME, ec);
+    ASSERT_FALSE(ec);
 
     for (size_t i = 0; i < k_iterations_to_fill_buffer; ++i)
     {
@@ -312,11 +335,10 @@ TEST_F(DirectoryChangesTest, Detects_Buffer_Overflow_With_No_Errors_Flag_Set)
         delete_file(file);
     }
 
-    std::error_code ec;
     bool has_buffer_overflow = false;
     for (int i = 0; i < 5/*try few times*/; ++i)
     {
-        while (auto data = io_port_.query(ec))
+        while (auto data = io_port_->query(ec))
         {
             ASSERT_TRUE(dir_changes_->is_directory_change(*data));
             if (dir_changes_->has_buffer_overflow(*data))
@@ -333,7 +355,8 @@ TEST_F(DirectoryChangesTest, Detects_Buffer_Overflow_With_No_Errors_Flag_Set)
             }
             else
             {
-                dir_changes_->start_watch();
+                dir_changes_->start_watch(ec);
+                ASSERT_FALSE(ec);
             }
         }
     }

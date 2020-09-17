@@ -1,4 +1,5 @@
 #include <win_io/detail/read_directory_changes.h>
+#include <win_io/detail/last_error_utils.h>
 
 #include <chrono>
 
@@ -17,44 +18,100 @@ namespace
     }
 } // namespace
 
-DirectoryChanges::DirectoryChanges(WinHANDLE directory, void* buffer
+/*static*/ std::optional<DirectoryChanges> DirectoryChanges::make(
+    WinHANDLE directory, void* buffer
     , WinDWORD length, bool watch_sub_tree, WinDWORD notify_filter
-    , IoCompletionPort& io_port, WinULONG_PTR dir_key /*= 1*/)
-    : io_port_(io_port)
-    , directory_(directory)
-    , buffer_(buffer)
-    , dir_key_(dir_key)
-    , ov_()
-    , length_(length)
-    , notify_filter_(notify_filter)
-    , owns_directory_(false)
-    , watch_sub_tree_(watch_sub_tree)
+    , IoCompletionPort& io_port, WinULONG_PTR dir_key
+    , std::error_code& ec) noexcept
 {
     assert((reinterpret_cast<std::uintptr_t>(buffer) % sizeof(WinDWORD) == 0)
-        && "[Dc] Buffer should be DWORD alligned");
+        && "[Dc] Buffer should be DWORD aligned");
     assert(((directory != INVALID_HANDLE_VALUE) && (directory != nullptr))
         && "[Dc] Directory should be valid");
 
-    // #TODO: throw DirectoryChangesError exception with nested
-    // IoCompletionPortError if there is any
-    io_port_.associate_device(directory, dir_key_);
+    io_port.associate_device(directory, dir_key, ec);
+    if (ec)
+    {
+        return std::nullopt;
+    }
+
+    std::optional<DirectoryChanges> value;
+    DirectoryChanges& o = value.emplace();
+    o.io_port_ = &io_port;
+    o.directory_ = directory;
+    o.buffer_ = buffer;
+    o.dir_key_ = dir_key;
+    o.ov_ = {};
+    o.length_ = length;
+    o.notify_filter_ = notify_filter;
+    o.owns_directory_ = false;
+    o.watch_sub_tree_ = watch_sub_tree;
+    return value;
 }
 
-DirectoryChanges::DirectoryChanges(const wchar_t* directory_name
+/*static*/ std::optional<DirectoryChanges> DirectoryChanges::make(
+    const wchar_t* directory_name
     , void* buffer, WinDWORD length
     , bool watch_sub_tree, WinDWORD notify_filter
-    , IoCompletionPort& io_port, WinULONG_PTR dir_key /*= 1*/)
-    : DirectoryChanges(open_directory(directory_name)
-        , buffer, length, watch_sub_tree, notify_filter, io_port, dir_key)
+    , IoCompletionPort& io_port, WinULONG_PTR dir_key
+    , std::error_code& ec) noexcept
 {
-    owns_directory_ = true;
+    WinHANDLE directory = open_directory(directory_name, ec);
+    if (ec)
+    {
+        return std::nullopt;
+    }
+
+    if (auto o = make(directory, buffer, length, watch_sub_tree, notify_filter, io_port, dir_key, ec);
+        o.has_value() && !ec)
+    {
+        o->owns_directory_ = true;
+        return o;
+    }
+
+    (void)::CloseHandle(directory);
+    return std::nullopt;
 }
 
-WinHANDLE DirectoryChanges::open_directory(const wchar_t* directory_name)
+DirectoryChanges::DirectoryChanges(DirectoryChanges&& rhs) noexcept
+    : io_port_(std::exchange(rhs.io_port_, nullptr))
+    , directory_(std::exchange(rhs.directory_, INVALID_HANDLE_VALUE))
+    , buffer_(std::exchange(rhs.buffer_, nullptr))
+    , dir_key_(std::exchange(rhs.dir_key_, 0))
+    , ov_{}
+    , length_(std::exchange(rhs.length_, 0))
+    , notify_filter_(std::exchange(rhs.notify_filter_, 0))
+    , owns_directory_(std::exchange(rhs.owns_directory_, false))
+    , watch_sub_tree_(std::exchange(rhs.watch_sub_tree_, false))
+{
+    ov_ = rhs.ov_;
+}
+
+DirectoryChanges& DirectoryChanges::operator=(DirectoryChanges&& rhs) noexcept
+{
+    if (this == &rhs)
+    {
+        return *this;
+    }
+    close();
+
+    io_port_ = std::exchange(rhs.io_port_, nullptr);
+    directory_ = std::exchange(rhs.directory_, INVALID_HANDLE_VALUE);
+    buffer_ = std::exchange(rhs.buffer_, nullptr);
+    dir_key_ = std::exchange(rhs.dir_key_, 0);
+    ov_ = rhs.ov_;
+    length_ = std::exchange(rhs.length_, 0);
+    notify_filter_ = std::exchange(rhs.notify_filter_, 0);
+    owns_directory_ = std::exchange(rhs.owns_directory_, false);
+    watch_sub_tree_ = std::exchange(rhs.watch_sub_tree_, false);
+    return *this;
+}
+
+/*static*/ WinHANDLE DirectoryChanges::open_directory(const wchar_t* directory_name, std::error_code& ec)
 {
     const auto handle = ::CreateFileW(directory_name
         , FILE_LIST_DIRECTORY
-        // Anyone can do whatever he wants
+        // Anyone can do whatever needed.
         , FILE_SHARE_DELETE | FILE_SHARE_READ | FILE_SHARE_WRITE
         , nullptr
         , OPEN_EXISTING
@@ -63,7 +120,7 @@ WinHANDLE DirectoryChanges::open_directory(const wchar_t* directory_name)
         , nullptr);
     if (handle == INVALID_HANDLE_VALUE)
     {
-        throw_last_error<DirectoryChangesError>("[Dc] ::CreateFileW()");
+        ec = make_last_error_code();
     }
     return handle;
 }
@@ -80,16 +137,23 @@ const void* DirectoryChanges::buffer() const
 
 DirectoryChanges::~DirectoryChanges()
 {
+    close();
+}
+
+void DirectoryChanges::close() noexcept
+{
     if (owns_directory_)
     {
-        ::CloseHandle(directory_);
+        (void)::CloseHandle(directory_);
+        directory_ = nullptr;
+        owns_directory_ = false;
     }
 }
 
 void DirectoryChanges::start_watch(std::error_code& ec)
 {
     ec = std::error_code();
-    // See ::ReadDirectoryChangesExW(): starting from Windows 10
+    // See ::ReadDirectoryChangesExW(): starting from Windows 10.
     const BOOL status = ::ReadDirectoryChangesW(directory_
         , buffer_, length_, watch_sub_tree_, notify_filter_
         , nullptr, &GetOverlapped(ov_), nullptr);
@@ -97,13 +161,6 @@ void DirectoryChanges::start_watch(std::error_code& ec)
     {
         ec = make_last_error_code();
     }
-}
-
-void DirectoryChanges::start_watch()
-{
-    std::error_code ec;
-    start_watch(ec);
-    throw_if_error<DirectoryChangesError>("[Dc] ::ReadDirectoryChangesW()", ec);
 }
 
 bool DirectoryChanges::is_directory_change(const PortData& data) const
@@ -128,7 +185,7 @@ bool DirectoryChanges::is_valid_directory_change(const PortData& data) const
 DirectoryChangesResults DirectoryChanges::wait_impl(
     WinDWORD milliseconds, std::error_code& ec)
 {
-    const auto data = io_port_.wait_for(std::chrono::milliseconds(milliseconds), ec);
+    auto data = io_port_->wait_for(std::chrono::milliseconds(milliseconds), ec);
     if (!data)
     {
         return DirectoryChangesResults();
@@ -140,8 +197,7 @@ DirectoryChangesResults DirectoryChanges::wait_impl(
     {
         return DirectoryChangesResults(std::move(*data));
     }
-    return DirectoryChangesResults(
-        DirectoryChangesRange(buffer_, std::move(*data)));
+    return DirectoryChangesResults(DirectoryChangesRange(buffer_, std::move(*data)));
 }
 
 DirectoryChangesResults DirectoryChanges::get(std::error_code& ec)
@@ -149,23 +205,7 @@ DirectoryChangesResults DirectoryChanges::get(std::error_code& ec)
     return wait_impl(INFINITE, ec);
 }
 
-DirectoryChangesResults DirectoryChanges::get()
-{
-    std::error_code ec;
-    auto data = get(ec);
-    throw_if_error<DirectoryChangesError>("[Dc] failed to wait for data", ec);
-    return data;
-}
-
 DirectoryChangesResults DirectoryChanges::query(std::error_code& ec)
 {
     return wait_impl(0, ec);
-}
-
-DirectoryChangesResults DirectoryChanges::query()
-{
-    std::error_code ec;
-    auto data = query(ec);
-    throw_if_error<DirectoryChangesError>("[Dc] failed to wait for data", ec);
-    return data;
 }
