@@ -12,7 +12,7 @@
 namespace
 {
 
-using namespace wi::detail;
+using namespace wi;
 
 using PrintChangesError = std::runtime_error;
 

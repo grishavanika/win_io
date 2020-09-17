@@ -7,8 +7,8 @@
 
 #include <cstdio>
 
-using wi::detail::IoCompletionPort;
-using wi::detail::PortData;
+using wi::IoCompletionPort;
+using wi::PortData;
 
 using namespace std::chrono_literals;
 

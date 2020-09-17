@@ -3,7 +3,6 @@
 #include <Windows.h>
 
 using namespace wi;
-using namespace detail;
 
 namespace
 {
@@ -124,20 +123,15 @@ std::size_t DirectoryChangesIterator::available_size() const
 
 namespace wi
 {
-    namespace detail
+    bool operator==(const DirectoryChangesIterator& lhs
+        , const DirectoryChangesIterator& rhs)
     {
+        return (lhs.current_ == rhs.current_);
+    }
 
-        bool operator==(const DirectoryChangesIterator& lhs
-            , const DirectoryChangesIterator& rhs)
-        {
-            return (lhs.current_ == rhs.current_);
-        }
-
-        bool operator!=(const DirectoryChangesIterator& lhs
-            , const DirectoryChangesIterator& rhs)
-        {
-            return !(lhs == rhs);
-        }
-
-    } // namespace detail
+    bool operator!=(const DirectoryChangesIterator& lhs
+        , const DirectoryChangesIterator& rhs)
+    {
+        return !(lhs == rhs);
+    }
 } // namespace wi

@@ -16,7 +16,7 @@
 #include <cstdio>
 #include <cstring>
 
-using namespace wi::detail;
+using namespace wi;
 
 using namespace std::chrono_literals;
 

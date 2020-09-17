@@ -8,7 +8,6 @@
 #include <Windows.h>
 
 using namespace wi;
-using namespace detail;
 
 namespace
 {
@@ -120,7 +119,7 @@ DirectoryChanges& DirectoryChanges::operator=(DirectoryChanges&& rhs) noexcept
         , nullptr);
     if (handle == INVALID_HANDLE_VALUE)
     {
-        ec = make_last_error_code();
+        ec = detail::make_last_error_code();
     }
     return handle;
 }
@@ -159,7 +158,7 @@ void DirectoryChanges::start_watch(std::error_code& ec)
         , nullptr, &GetOverlapped(ov_), nullptr);
     if (!status)
     {
-        ec = make_last_error_code();
+        ec = detail::make_last_error_code();
     }
 }
 

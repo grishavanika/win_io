@@ -4,7 +4,7 @@
 
 #include <variant>
 
-namespace wi::detail
+namespace wi
 {
     // `DirectoryChanges` helper is thin adapter around `IoCompletionPort`
     // that does not own the port. As a result, waiting for directory change
@@ -128,7 +128,7 @@ namespace wi::detail
     };
 } // namespace wi
 
-namespace wi::detail
+namespace wi
 {
     template<typename Rep, typename Period>
     DirectoryChangesResults DirectoryChanges::wait_for(

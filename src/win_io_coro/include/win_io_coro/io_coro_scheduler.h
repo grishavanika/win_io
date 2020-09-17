@@ -8,8 +8,6 @@ namespace wi
 {
     namespace coro
     {
-        using IoCompletionPort = ::wi::detail::IoCompletionPort;
-
         class IoScheduler
         {
         public:

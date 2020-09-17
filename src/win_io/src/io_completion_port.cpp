@@ -8,7 +8,6 @@
 #include <Windows.h>
 
 using namespace wi;
-using namespace detail;
 
 /*static*/ std::optional<IoCompletionPort> IoCompletionPort::make(std::error_code& ec) noexcept
 {
@@ -28,7 +27,7 @@ using namespace detail;
         , concurrent_threads_hint);
     if (o.io_port_ == nullptr)
     {
-        ec = make_last_error_code();
+        ec = detail::make_last_error_code();
         return std::nullopt;
     }
 
@@ -72,7 +71,7 @@ void IoCompletionPort::post(const PortData& data, std::error_code& ec)
         , static_cast<LPOVERLAPPED>(data.ptr));
     if (!ok)
     {
-        ec = make_last_error_code();
+        ec = detail::make_last_error_code();
     }
 }
 
@@ -115,7 +114,7 @@ std::optional<PortData> IoCompletionPort::wait_impl(
         return data;
     }
 
-    ec = make_last_error_code();
+    ec = detail::make_last_error_code();
     if (overlapped)
     {
         return data;
@@ -133,7 +132,7 @@ void IoCompletionPort::associate_with_impl(
         , 0);
     if (!this_port)
     {
-        ec = make_last_error_code();
+        ec = detail::make_last_error_code();
         return;
     }
     assert(this_port == io_port_ && "[Io] Expected to have same Io Port");

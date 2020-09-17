@@ -7,7 +7,7 @@
 
 #include <cstdint>
 
-namespace wi::detail
+namespace wi
 {
     // Low-level wrapper around Windows I/O Completion Port.
     class IoCompletionPort
@@ -30,7 +30,7 @@ namespace wi::detail
         // Blocking call.
         // It's possible to have valid data, but still receive some `error_code`.
         // See https://xania.org/200807/iocp article for possible
-        // combination of results from the call to ::GetQueuedCompletionStatus()
+        // combination of results from the call to ::GetQueuedCompletionStatus().
         std::optional<PortData> get(std::error_code& ec);
 
         // Non-blocking call.
@@ -58,9 +58,9 @@ namespace wi::detail
     private:
         WinHANDLE io_port_ = nullptr;
     };
-} // namespace wi::detail
+} // namespace wi
 
-namespace wi::detail
+namespace wi
 {
     template<typename Rep, typename Period>
     std::optional<PortData> IoCompletionPort::wait_for(
@@ -69,5 +69,5 @@ namespace wi::detail
         const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(time);
         return wait_impl(static_cast<WinDWORD>(ms.count()), ec);
     }
-} // namespace wi::detail
+} // namespace wi
 

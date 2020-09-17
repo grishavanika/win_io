@@ -9,7 +9,7 @@
 
 #include <Windows.h>
 
-namespace io = wi::detail;
+namespace io = wi;
 
 namespace rx = rxcpp;
 namespace rxu = rxcpp::util;

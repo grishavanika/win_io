@@ -110,7 +110,7 @@ TEST(Coro, Fake_TestTask_Compiles_With_Co_Return)
 TEST(Coro, IoScheduler_Poll_One_Returns_Zero_When_No_Task_Was_Created)
 {
     std::error_code ec;
-    auto io_port = detail::IoCompletionPort::make(ec);
+    auto io_port = IoCompletionPort::make(ec);
     ASSERT_FALSE(ec);
     coro::IoScheduler scheduler(*io_port);
     ASSERT_EQ(0u, scheduler.poll_one());
@@ -119,11 +119,11 @@ TEST(Coro, IoScheduler_Poll_One_Returns_Zero_When_No_Task_Was_Created)
 TEST(Coro, IoScheduler_Poll_One_Returns_Zero_When_Data_Exists_But_No_Task_Was_Created)
 {
     std::error_code ec;
-    auto io_port = detail::IoCompletionPort::make(ec);
+    auto io_port = IoCompletionPort::make(ec);
     ASSERT_FALSE(ec);
     coro::IoScheduler scheduler(*io_port);
 
-    io_port->post(detail::PortData(1), ec);
+    io_port->post(PortData(1), ec);
     ASSERT_FALSE(ec);
     ASSERT_EQ(0u, scheduler.poll_one());
 
@@ -134,7 +134,7 @@ TEST(Coro, IoScheduler_Poll_One_Returns_Zero_When_Data_Exists_But_No_Task_Was_Cr
 TEST(Coro, Coroutine_Is_Suspended_When_Waiting_For_Io_Task)
 {
     std::error_code ec;
-    auto io_port = detail::IoCompletionPort::make(ec);
+    auto io_port = IoCompletionPort::make(ec);
     ASSERT_FALSE(ec);
     coro::IoScheduler scheduler(*io_port);
 
@@ -152,7 +152,7 @@ TEST(Coro, Coroutine_Is_Suspended_When_Waiting_For_Io_Task)
     ASSERT_TRUE(started);
     ASSERT_FALSE(task.is_finished());
 
-    io_port->post(detail::PortData(1), ec);
+    io_port->post(PortData(1), ec);
     ASSERT_FALSE(ec);
     ASSERT_FALSE(task.is_finished());
 
@@ -163,12 +163,12 @@ TEST(Coro, Coroutine_Is_Suspended_When_Waiting_For_Io_Task)
 TEST(Coro, Await_On_Io_Task_Returns_Posted_Data)
 {
     std::error_code ec;
-    auto io_port = detail::IoCompletionPort::make(ec);
+    auto io_port = IoCompletionPort::make(ec);
     ASSERT_FALSE(ec);
     coro::IoScheduler scheduler(*io_port);
 
-    const detail::PortData post_data(2);
-    detail::PortData await_data;
+    const PortData post_data(2);
+    PortData await_data;
 
     auto work = [&]() -> TestTask
     {
@@ -190,7 +190,7 @@ TEST(Coro, Await_On_Io_Task_Returns_Posted_Data)
 TEST(Coro, Its_Possible_To_Await_On_More_Then_One_Io_Task_In_The_Same_Coro)
 {
     std::error_code ec;
-    auto io_port = detail::IoCompletionPort::make(ec);
+    auto io_port = IoCompletionPort::make(ec);
     ASSERT_FALSE(ec);
     coro::IoScheduler scheduler(*io_port);
 
@@ -202,7 +202,7 @@ TEST(Coro, Its_Possible_To_Await_On_More_Then_One_Io_Task_In_The_Same_Coro)
         Wait_2_Finished,
     };
     State state = State::None;
-    detail::PortData last_data;
+    PortData last_data;
 
     auto work = [&]() -> TestTask
     {
@@ -220,7 +220,7 @@ TEST(Coro, Its_Possible_To_Await_On_More_Then_One_Io_Task_In_The_Same_Coro)
     ASSERT_EQ(State::Entered, state);
     ASSERT_FALSE(task.is_finished());
 
-    io_port->post(detail::PortData(3), ec);
+    io_port->post(PortData(3), ec);
     ASSERT_FALSE(ec);
 
     ASSERT_EQ(State::Entered, state);
@@ -228,7 +228,7 @@ TEST(Coro, Its_Possible_To_Await_On_More_Then_One_Io_Task_In_The_Same_Coro)
     ASSERT_EQ(State::Wait_1_Finished, state);
     ASSERT_FALSE(task.is_finished());
 
-    io_port->post(detail::PortData(4), ec);
+    io_port->post(PortData(4), ec);
     ASSERT_FALSE(ec);
 
     ASSERT_EQ(State::Wait_1_Finished, state);
@@ -236,14 +236,14 @@ TEST(Coro, Its_Possible_To_Await_On_More_Then_One_Io_Task_In_The_Same_Coro)
     ASSERT_EQ(State::Wait_2_Finished, state);
     ASSERT_TRUE(task.is_finished());
 
-    ASSERT_EQ(detail::PortData(4), last_data);
+    ASSERT_EQ(PortData(4), last_data);
 }
 
 TEST(Coro, Await_From_Multiple_Threads_Is_Safe)
 {
     constexpr std::size_t k_coro_threads_count = 10;
     std::error_code ec;
-    auto io_port = detail::IoCompletionPort::make(ec);
+    auto io_port = IoCompletionPort::make(ec);
     ASSERT_FALSE(ec);
     coro::IoScheduler scheduler(*io_port);
     std::atomic_bool start(false);
@@ -283,7 +283,7 @@ TEST(Coro, Await_From_Multiple_Threads_Is_Safe)
     for (std::size_t i = 0; i < k_coro_threads_count; ++i)
     {
         ASSERT_EQ(i, finished_count);
-        io_port->post(detail::PortData(1), ec);
+        io_port->post(PortData(1), ec);
         ASSERT_FALSE(ec);
         ASSERT_EQ(i, finished_count);
         ASSERT_EQ(1u, scheduler.poll_one());

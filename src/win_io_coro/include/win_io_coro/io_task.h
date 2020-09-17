@@ -9,8 +9,6 @@ namespace wi
 {
     namespace coro
     {
-        using PortData = ::wi::detail::PortData;
-
         class IoScheduler;
 
         // Awaitable task with minimal interface
