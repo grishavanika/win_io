@@ -154,16 +154,6 @@ namespace wi
 
 #include <cassert>
 
-// WARN: defines below leak from this header :(
-#if !defined(VC_EXTRALEAN)
-#  define VC_EXTRALEAN
-#endif
-#if !defined(WIN32_LEAN_AND_MEAN)
-#  define WIN32_LEAN_AND_MEAN
-#endif
-#if !defined(WIN32_LEAN_AND_MEAN)
-#  define NOMINMAX
-#endif
 #include <Windows.h>
 
 namespace wi

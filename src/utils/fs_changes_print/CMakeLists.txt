@@ -1,5 +1,7 @@
 set(exe_name fs_changes_print)
 
+find_package(date CONFIG REQUIRED)
+
 target_collect_sources(${exe_name})
 
 add_executable(${exe_name} ${${exe_name}_files})
@@ -16,3 +18,4 @@ endif()
 set_all_warnings(${exe_name} PRIVATE)
 
 target_link_libraries(${exe_name} PRIVATE win_io)
+target_link_libraries(${exe_name} PRIVATE date::date)

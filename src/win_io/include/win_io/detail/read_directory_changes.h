@@ -80,6 +80,8 @@ namespace wi
         // No real reference or pointer to persistent memory returned.
         // All variables are created on the fly
         // (and stored in the iterator itself).
+        // Something like "arrow proxy" can be used instead:
+        // https://quuxplusone.github.io/blog/2019/02/06/arrow-proxy/
         const DirectoryChange operator*();
         const DirectoryChange* operator->();
 

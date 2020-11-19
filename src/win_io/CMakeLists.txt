@@ -16,7 +16,7 @@ endif()
 # Turn-off not-needed Windows.h parts.
 # See http://web.archive.org/web/20121219084749/http://support.microsoft.com/kb/166474
 # for more details
-target_compile_definitions(${lib_name} PRIVATE
+target_compile_definitions(${lib_name} PUBLIC
     VC_EXTRALEAN WIN32_LEAN_AND_MEAN NOMINMAX)
 
 target_include_directories(${lib_name} PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
