@@ -39,7 +39,7 @@ namespace wi
     {
         WinULONG_PTR completion_key = 0;
         void* overlapped = nullptr;
-        WinULONG_PTR _unused; // Internal.
+        WinULONG_PTR _unused = 0; // Internal.
         WinDWORD bytes_transferred = 0;
 
         PortEntry(WinDWORD bytes = 0, WinULONG_PTR key = 0, void* overlapped = nullptr);
@@ -66,9 +66,10 @@ namespace wi::detail
 namespace wi
 {
     inline PortEntry::PortEntry(WinDWORD bytes /*= 0*/, WinULONG_PTR key /*= 0*/, void* ov /*= nullptr*/)
-        : bytes_transferred(bytes)
-        , completion_key(key)
+        : completion_key(key)
         , overlapped(ov)
+        , _unused(0)
+        , bytes_transferred(bytes)
     {
     }
 
@@ -110,13 +111,15 @@ namespace wi
         // See https://xania.org/200807/iocp article for possible
         // combination of results from the call to ::GetQueuedCompletionStatus().
         std::optional<PortEntry> get(std::error_code& ec);
-        std::size_t get_many(std::span<PortEntry> entries_to_write
+
+        std::span<PortEntry> get_many(std::span<PortEntry> entries_to_write
             , std::error_code& ec
             , bool alertable = false);
 
         // Non-blocking call.
         std::optional<PortEntry> query(std::error_code& ec);
-        std::size_t query_many(std::span<PortEntry> entries_to_write
+
+        std::span<PortEntry> query_many(std::span<PortEntry> entries_to_write
             , std::error_code& ec
             , bool alertable = false);
 
@@ -124,8 +127,9 @@ namespace wi
         template<typename Rep, typename Period>
         std::optional<PortEntry> wait_for(std::chrono::duration<Rep, Period> time
             , std::error_code& ec);
+
         template<typename Rep, typename Period>
-        std::size_t wait_for_many(std::span<PortEntry> entries_to_write
+        std::span<PortEntry> wait_for_many(std::span<PortEntry> entries_to_write
             , std::chrono::duration<Rep, Period> time
             , std::error_code& ec
             , bool alertable = false);
@@ -140,7 +144,7 @@ namespace wi
 
     private:
         std::optional<PortEntry> wait_impl(WinDWORD milliseconds, std::error_code& ec);
-        std::size_t wait_many_impl(std::span<PortEntry> entries_to_write
+        std::span<PortEntry> wait_many_impl(std::span<PortEntry> entries_to_write
             , WinDWORD milliseconds
             , bool alertable
             , std::error_code& ec);
@@ -164,7 +168,7 @@ namespace wi
     }
 
     template<typename Rep, typename Period>
-    std::size_t IoCompletionPort::wait_for_many(std::span<PortEntry> entries_to_write
+    std::span<PortEntry> IoCompletionPort::wait_for_many(std::span<PortEntry> entries_to_write
         , std::chrono::duration<Rep, Period> time
         , std::error_code& ec
         , bool alertable /*= false*/)
@@ -259,7 +263,9 @@ namespace wi
     inline void IoCompletionPort::post(const PortEntry& data, std::error_code& ec)
     {
         ec = std::error_code();
-        const BOOL ok = ::PostQueuedCompletionStatus(io_port_, data.bytes_transferred, data.completion_key
+        const BOOL ok = ::PostQueuedCompletionStatus(io_port_
+            , data.bytes_transferred
+            , data.completion_key
             , static_cast<LPOVERLAPPED>(data.overlapped));
         if (!ok)
         {
@@ -272,7 +278,7 @@ namespace wi
         return wait_impl(INFINITE, ec);
     }
 
-    inline std::size_t IoCompletionPort::get_many(std::span<PortEntry> entries_to_write
+    inline std::span<PortEntry> IoCompletionPort::get_many(std::span<PortEntry> entries_to_write
         , std::error_code& ec
         , bool alertable /*= false*/)
     {
@@ -284,7 +290,7 @@ namespace wi
         return wait_impl(0/*no blocking wait*/, ec);
     }
 
-    inline std::size_t IoCompletionPort::query_many(std::span<PortEntry> entries_to_write
+    inline std::span<PortEntry> IoCompletionPort::query_many(std::span<PortEntry> entries_to_write
         , std::error_code& ec
         , bool alertable /*= false*/)
     {
@@ -311,7 +317,10 @@ namespace wi
         LPOVERLAPPED overlapped = nullptr;
 
         const BOOL status = ::GetQueuedCompletionStatus(io_port_
-            , &bytes_transferred, &completion_key, &overlapped, milliseconds);
+            , &bytes_transferred
+            , &completion_key
+            , &overlapped
+            , milliseconds);
         PortEntry data(bytes_transferred, completion_key, overlapped);
 
         if (status)
@@ -328,7 +337,7 @@ namespace wi
         return std::nullopt;
     }
 
-    inline std::size_t IoCompletionPort::wait_many_impl(std::span<PortEntry> entries_to_write
+    inline std::span<PortEntry> IoCompletionPort::wait_many_impl(std::span<PortEntry> entries_to_write
         , WinDWORD milliseconds
         , bool alertable
         , std::error_code& ec)
@@ -343,15 +352,16 @@ namespace wi
             , &count
             , milliseconds
             , BOOL(alertable));
+        entries_to_write = entries_to_write.first(count);
 
         if (status)
         {
             ec = std::error_code();
-            return std::size_t(count);
+            return entries_to_write;
         }
 
         ec = detail::make_last_error_code();
-        return std::size_t(count);
+        return entries_to_write;
     }
 
     inline void IoCompletionPort::associate_with_impl(

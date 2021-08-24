@@ -83,11 +83,11 @@ TEST(IoCompletionPort, Blocking_Get_Success_After_Post_Many)
         port->post(entry, ec);
         ASSERT_FALSE(ec);
     }
-    PortEntry all_entries[2];
-    const std::size_t count = port->get_many(all_entries, ec);
+    PortEntry all_entries[3];
+    const auto ready = port->get_many(all_entries, ec);
     ASSERT_FALSE(ec);
-    ASSERT_EQ(std::size_t(2), count);
-    ASSERT_TRUE(std::equal(std::begin(to_send), std::end(to_send), std::begin(all_entries)));
+    ASSERT_EQ(std::size_t(2), ready.size());
+    ASSERT_TRUE(std::equal(std::begin(to_send), std::end(to_send), std::begin(ready)));
 }
 
 TEST(IoCompletionPort, Has_No_Data_Until_Post)
