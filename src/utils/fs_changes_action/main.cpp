@@ -71,9 +71,9 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
 
     std::error_code ec;
     auto io_service = io::IoCompletionPort::make(1/*threads count*/, ec);
-    assert(ec);
-    rxs::subject<io::PortData> io_port_data;
-    rx::observable<io::PortData> io_changes = io_port_data.get_observable();
+    assert(!ec);
+    rxs::subject<io::PortEntry> io_port_data;
+    rx::observable<io::PortEntry> io_changes = io_port_data.get_observable();
     auto io_port = io_port_data.get_subscriber();
     
     const io::WinDWORD k_filters = 0
@@ -89,15 +89,16 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
     DWORD buffer_c[16 * 1024];
     auto dir_watcher_c = io::DirectoryChanges::make(L"C:\\", buffer_c, sizeof(buffer_c)
         , true/*watch sub tree*/, k_filters, *io_service, 1/*dir_key*/, ec);
-    assert(ec);
+    assert(!ec);
     DWORD buffer_d[16 * 1024];
     auto dir_watcher_d = io::DirectoryChanges::make(L"D:\\", buffer_d, sizeof(buffer_d)
         , true/*watch sub tree*/, k_filters, *io_service, 2/*dir_key*/, ec);
+    assert(!ec);
 
     io::DirectoryChanges* dirs[] = {&*dir_watcher_c, &*dir_watcher_d};
 
     auto dir_events = io_changes
-        .group_by([&](io::PortData pd)
+        .group_by([&](io::PortEntry pd)
         {
             for (io::DirectoryChanges* dir : dirs)
             {
@@ -108,15 +109,15 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
             }
             return static_cast<io::DirectoryChanges*>(nullptr);
         })
-        .filter([](rx::grouped_observable<io::DirectoryChanges*, io::PortData> group)
+        .filter([](rx::grouped_observable<io::DirectoryChanges*, io::PortEntry> group)
         {
             io::DirectoryChanges* dir = group.get_key();
             return (dir != nullptr);
         })
-        .merge_transform([](rx::grouped_observable<io::DirectoryChanges*, io::PortData> group)
+        .merge_transform([](rx::grouped_observable<io::DirectoryChanges*, io::PortEntry> group)
         {
             io::DirectoryChanges* dir = group.get_key();
-            return group.transform([dir](io::PortData pd)
+            return group.transform([dir](io::PortEntry pd)
             {
                 return DirectoryEvent{dir, io::DirectoryChangesRange(dir->buffer(), pd)};
             });
@@ -167,7 +168,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
     {
         // #XXX: errors should be pushed to pipeline
         dir->start_watch(ec);
-        assert(ec);
+        assert(!ec);
     }
 
     while (true)

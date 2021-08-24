@@ -142,16 +142,16 @@ TEST_F(DirectoryChangesTest, Wait_On_Dir_Change_Can_Return_Other_Port_Data)
     start_with_filters(FILE_NOTIFY_CHANGE_FILE_NAME, ec);
     ASSERT_FALSE(ec);
 
-    io_port_->post(PortData(10, 1, nullptr), ec);
+    io_port_->post(PortEntry(10, 1, nullptr), ec);
     ASSERT_FALSE(ec);
     auto results = dir_changes_->wait_for(10ms, ec);
     ASSERT_FALSE(ec);
     // Wait resulted to getting PortData
     const auto port_data = results.port_changes();
     ASSERT_TRUE(port_data);
-    ASSERT_EQ(WinDWORD(10), port_data->value);
-    ASSERT_EQ(WinULONG_PTR(1), port_data->key);
-    ASSERT_EQ(nullptr, port_data->ptr);
+    ASSERT_EQ(WinDWORD(10), port_data->bytes_transferred);
+    ASSERT_EQ(WinULONG_PTR(1), port_data->completion_key);
+    ASSERT_EQ(nullptr, port_data->overlapped);
 
     // Now, create & handle directory event
     const auto file = create_random_file();

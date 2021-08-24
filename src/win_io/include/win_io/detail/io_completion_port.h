@@ -2,6 +2,7 @@
 #include <chrono>
 #include <optional>
 #include <system_error> // std::error_code.
+#include <span>
 
 #include <cstdint> // std::[u]int*_t.
 
@@ -34,17 +35,18 @@ namespace wi
 
 namespace wi
 {
-    struct PortData
+    struct PortEntry // OVERLAPPED_ENTRY
     {
-        WinDWORD value = 0;
-        WinULONG_PTR key = 0;
-        void* ptr = nullptr;
+        WinULONG_PTR completion_key = 0;
+        void* overlapped = nullptr;
+        WinULONG_PTR _unused; // Internal.
+        WinDWORD bytes_transferred = 0;
 
-        PortData(WinDWORD value = 0, WinULONG_PTR key = 0, void* ptr = nullptr);
+        PortEntry(WinDWORD bytes = 0, WinULONG_PTR key = 0, void* overlapped = nullptr);
     };
 
-    bool operator==(const PortData& lhs, const PortData& rhs);
-    bool operator!=(const PortData& lhs, const PortData& rhs);
+    bool operator==(const PortEntry& lhs, const PortEntry& rhs);
+    bool operator!=(const PortEntry& lhs, const PortEntry& rhs);
 } // namespace wi
 
 namespace wi::detail
@@ -63,21 +65,21 @@ namespace wi::detail
 
 namespace wi
 {
-    inline PortData::PortData(WinDWORD v /*= 0*/, WinULONG_PTR k /*= 0*/, void* p /*= nullptr*/)
-        : value(v)
-        , key(k)
-        , ptr(p)
+    inline PortEntry::PortEntry(WinDWORD bytes /*= 0*/, WinULONG_PTR key /*= 0*/, void* ov /*= nullptr*/)
+        : bytes_transferred(bytes)
+        , completion_key(key)
+        , overlapped(ov)
     {
     }
 
-    inline bool operator==(const PortData& lhs, const PortData& rhs)
+    inline bool operator==(const PortEntry& lhs, const PortEntry& rhs)
     {
-        return ((lhs.value == rhs.value)
-            && (lhs.key == rhs.key)
-            && (lhs.ptr == rhs.ptr));
+        return ((lhs.bytes_transferred == rhs.bytes_transferred)
+            && (lhs.completion_key     == rhs.completion_key)
+            && (lhs.overlapped         == rhs.overlapped));
     }
 
-    inline bool operator!=(const PortData& lhs, const PortData& rhs)
+    inline bool operator!=(const PortEntry& lhs, const PortEntry& rhs)
     {
         return !(lhs == rhs);
     }
@@ -101,21 +103,32 @@ namespace wi
         IoCompletionPort& operator=(IoCompletionPort&& rhs) noexcept;
         ~IoCompletionPort();
 
-        void post(const PortData& data, std::error_code& ec);
+        void post(const PortEntry& data, std::error_code& ec);
 
         // Blocking call.
         // It's possible to have valid data, but still receive some `error_code`.
         // See https://xania.org/200807/iocp article for possible
         // combination of results from the call to ::GetQueuedCompletionStatus().
-        std::optional<PortData> get(std::error_code& ec);
+        std::optional<PortEntry> get(std::error_code& ec);
+        std::size_t get_many(std::span<PortEntry> entries_to_write
+            , std::error_code& ec
+            , bool alertable = false);
 
         // Non-blocking call.
-        std::optional<PortData> query(std::error_code& ec);
+        std::optional<PortEntry> query(std::error_code& ec);
+        std::size_t query_many(std::span<PortEntry> entries_to_write
+            , std::error_code& ec
+            , bool alertable = false);
 
         // Blocking call with time-out.
         template<typename Rep, typename Period>
-        std::optional<PortData> wait_for(std::chrono::duration<Rep, Period> time
+        std::optional<PortEntry> wait_for(std::chrono::duration<Rep, Period> time
             , std::error_code& ec);
+        template<typename Rep, typename Period>
+        std::size_t wait_for_many(std::span<PortEntry> entries_to_write
+            , std::chrono::duration<Rep, Period> time
+            , std::error_code& ec
+            , bool alertable = false);
 
         void associate_device(WinHANDLE device, WinULONG_PTR key
             , std::error_code& ec);
@@ -126,7 +139,11 @@ namespace wi
         WinHANDLE native_handle();
 
     private:
-        std::optional<PortData> wait_impl(WinDWORD milliseconds, std::error_code& ec);
+        std::optional<PortEntry> wait_impl(WinDWORD milliseconds, std::error_code& ec);
+        std::size_t wait_many_impl(std::span<PortEntry> entries_to_write
+            , WinDWORD milliseconds
+            , bool alertable
+            , std::error_code& ec);
         void associate_with_impl(WinHANDLE device, WinULONG_PTR key
             , std::error_code& ec);
         void close() noexcept;
@@ -139,11 +156,21 @@ namespace wi
 namespace wi
 {
     template<typename Rep, typename Period>
-    std::optional<PortData> IoCompletionPort::wait_for(
+    std::optional<PortEntry> IoCompletionPort::wait_for(
         std::chrono::duration<Rep, Period> time, std::error_code& ec)
     {
         const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(time);
         return wait_impl(static_cast<WinDWORD>(ms.count()), ec);
+    }
+
+    template<typename Rep, typename Period>
+    std::size_t IoCompletionPort::wait_for_many(std::span<PortEntry> entries_to_write
+        , std::chrono::duration<Rep, Period> time
+        , std::error_code& ec
+        , bool alertable /*= false*/)
+    {
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(time);
+        return wait_many_impl(entries_to_write, static_cast<WinDWORD>(ms.count()), alertable, ec);
     }
 } // namespace wi
 
@@ -229,25 +256,39 @@ namespace wi
         }
     }
 
-    inline void IoCompletionPort::post(const PortData& data, std::error_code& ec)
+    inline void IoCompletionPort::post(const PortEntry& data, std::error_code& ec)
     {
         ec = std::error_code();
-        const BOOL ok = ::PostQueuedCompletionStatus(io_port_, data.value, data.key
-            , static_cast<LPOVERLAPPED>(data.ptr));
+        const BOOL ok = ::PostQueuedCompletionStatus(io_port_, data.bytes_transferred, data.completion_key
+            , static_cast<LPOVERLAPPED>(data.overlapped));
         if (!ok)
         {
             ec = detail::make_last_error_code();
         }
     }
 
-    inline std::optional<PortData> IoCompletionPort::get(std::error_code& ec)
+    inline std::optional<PortEntry> IoCompletionPort::get(std::error_code& ec)
     {
         return wait_impl(INFINITE, ec);
     }
 
-    inline std::optional<PortData> IoCompletionPort::query(std::error_code& ec)
+    inline std::size_t IoCompletionPort::get_many(std::span<PortEntry> entries_to_write
+        , std::error_code& ec
+        , bool alertable /*= false*/)
+    {
+        return wait_many_impl(entries_to_write, INFINITE, alertable, ec);
+    }
+
+    inline std::optional<PortEntry> IoCompletionPort::query(std::error_code& ec)
     {
         return wait_impl(0/*no blocking wait*/, ec);
+    }
+
+    inline std::size_t IoCompletionPort::query_many(std::span<PortEntry> entries_to_write
+        , std::error_code& ec
+        , bool alertable /*= false*/)
+    {
+        return wait_many_impl(entries_to_write, 0/*no blocking wait*/, alertable, ec);
     }
 
     inline void IoCompletionPort::associate_device(WinHANDLE device, WinULONG_PTR key
@@ -262,7 +303,7 @@ namespace wi
         associate_with_impl(socket, key, ec);
     }
 
-    inline std::optional<PortData> IoCompletionPort::wait_impl(
+    inline std::optional<PortEntry> IoCompletionPort::wait_impl(
         WinDWORD milliseconds, std::error_code& ec)
     {
         DWORD bytes_transferred = 0;
@@ -271,7 +312,7 @@ namespace wi
 
         const BOOL status = ::GetQueuedCompletionStatus(io_port_
             , &bytes_transferred, &completion_key, &overlapped, milliseconds);
-        PortData data(bytes_transferred, completion_key, overlapped);
+        PortEntry data(bytes_transferred, completion_key, overlapped);
 
         if (status)
         {
@@ -285,6 +326,32 @@ namespace wi
             return data;
         }
         return std::nullopt;
+    }
+
+    inline std::size_t IoCompletionPort::wait_many_impl(std::span<PortEntry> entries_to_write
+        , WinDWORD milliseconds
+        , bool alertable
+        , std::error_code& ec)
+    {
+        PortEntry* const begin_ = entries_to_write.data();
+        const LPOVERLAPPED_ENTRY entries = reinterpret_cast<LPOVERLAPPED_ENTRY>(begin_);
+        const ULONG max_count = ULONG(entries_to_write.size());
+        ULONG count = 0;
+        const BOOL status = ::GetQueuedCompletionStatusEx(io_port_
+            , entries
+            , max_count
+            , &count
+            , milliseconds
+            , BOOL(alertable));
+
+        if (status)
+        {
+            ec = std::error_code();
+            return std::size_t(count);
+        }
+
+        ec = detail::make_last_error_code();
+        return std::size_t(count);
     }
 
     inline void IoCompletionPort::associate_with_impl(

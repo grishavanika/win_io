@@ -8,7 +8,7 @@
 #include <cstdio>
 
 using wi::IoCompletionPort;
-using wi::PortData;
+using wi::PortEntry;
 
 using namespace std::chrono_literals;
 
@@ -62,12 +62,32 @@ TEST(IoCompletionPort, Blocking_Get_Success_After_Post)
     std::error_code ec;
     auto port = IoCompletionPort::make(ec);
     ASSERT_FALSE(ec);
-    const PortData send_data(1, 1, nullptr);
+    const PortEntry send_data(1, 1, nullptr);
     port->post(send_data, ec);
     ASSERT_FALSE(ec);
     const auto receive_data = port->get(ec);
     ASSERT_FALSE(ec);
     ASSERT_EQ(send_data, receive_data);
+}
+
+TEST(IoCompletionPort, Blocking_Get_Success_After_Post_Many)
+{
+    std::error_code ec;
+    auto port = IoCompletionPort::make(ec);
+    ASSERT_FALSE(ec);
+    PortEntry to_send[2];
+    to_send[0] = PortEntry(1, 1, nullptr);
+    to_send[1] = PortEntry(2, 2, nullptr);
+    for (const PortEntry& entry : to_send)
+    {
+        port->post(entry, ec);
+        ASSERT_FALSE(ec);
+    }
+    PortEntry all_entries[2];
+    const std::size_t count = port->get_many(all_entries, ec);
+    ASSERT_FALSE(ec);
+    ASSERT_EQ(std::size_t(2), count);
+    ASSERT_TRUE(std::equal(std::begin(to_send), std::end(to_send), std::begin(all_entries)));
 }
 
 TEST(IoCompletionPort, Has_No_Data_Until_Post)
@@ -79,7 +99,7 @@ TEST(IoCompletionPort, Has_No_Data_Until_Post)
     ASSERT_TRUE(ec);
     ASSERT_EQ(std::nullopt, receive_data);
     
-    const PortData send_data(1, 1, nullptr);
+    const PortEntry send_data(1, 1, nullptr);
     port->post(send_data, ec);
     ASSERT_FALSE(ec);
     receive_data = port->query(ec);
@@ -97,7 +117,7 @@ TEST(IoCompletionPort, Wait_Fails_Until_Post)
     ASSERT_TRUE(ec);
     ASSERT_EQ(std::nullopt, receive_data);
 
-    const PortData send_data(1, 1, nullptr);
+    const PortEntry send_data(1, 1, nullptr);
     port->post(send_data, ec);
     ASSERT_FALSE(ec);
     receive_data = port->wait_for(20ms, ec);
@@ -146,7 +166,7 @@ TEST_F(IoCompletionPortFileTest, Async_File_Write)
     ASSERT_FALSE(ec);
     ASSERT_TRUE(written)
         << "Failed to wait for write end: " << ec;
-    ASSERT_EQ(_countof(buffer), written->value);
-    ASSERT_EQ(1u, written->key);
-    ASSERT_EQ(&ov_, written->ptr);
+    ASSERT_EQ(_countof(buffer), written->bytes_transferred);
+    ASSERT_EQ(1u, written->completion_key);
+    ASSERT_EQ(&ov_, written->overlapped);
 }

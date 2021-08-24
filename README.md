@@ -1,3 +1,12 @@
+**OUTDATED**
+
+# How to build
+
+```
+cmake -G "Visual Studio 16 2019" -DCMAKE_TOOLCHAIN_FILE=C:\libs\vcpkg\scripts\buildsystems\vcpkg.cmake -A x64 ..
+```
+
+
 # Samples for Windows I/O Completion Ports
 
 [![Build Status (Windows)](https://ci.appveyor.com/api/projects/status/l8ii5sgufhfu8ojx?svg=true

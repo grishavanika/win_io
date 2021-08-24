@@ -39,7 +39,7 @@ namespace wi
         // (`buffer` is DWORD-aligned, variable length array of
         // `FILE_NOTIFY_INFORMATION` struct).
         explicit DirectoryChangesRange(const void* buffer, std::size_t size);
-        explicit DirectoryChangesRange(const void* buffer, PortData port_changes);
+        explicit DirectoryChangesRange(const void* buffer, PortEntry port_changes);
         explicit DirectoryChangesRange();
 
         bool has_changes() const;
@@ -71,7 +71,7 @@ namespace wi
 
         explicit DirectoryChangesIterator();
         explicit DirectoryChangesIterator(const void* buffer, const std::size_t max_size);
-        explicit DirectoryChangesIterator(const void* buffer, PortData port_changes);
+        explicit DirectoryChangesIterator(const void* buffer, PortEntry port_changes);
 
         DirectoryChangesIterator operator++();
         DirectoryChangesIterator operator++(int);
@@ -127,8 +127,8 @@ namespace wi
     }
 
     /*explicit*/ inline DirectoryChangesRange::DirectoryChangesRange(
-        const void* buffer, PortData port_changes)
-        : DirectoryChangesRange(buffer, static_cast<std::size_t>(port_changes.value))
+        const void* buffer, PortEntry port_changes)
+        : DirectoryChangesRange(buffer, static_cast<std::size_t>(port_changes.bytes_transferred))
     {
     }
 
@@ -201,13 +201,13 @@ namespace wi
     public:
         explicit DirectoryChangesResults();
         explicit DirectoryChangesResults(DirectoryChangesRange dir_changes);
-        explicit DirectoryChangesResults(PortData port_changes);
+        explicit DirectoryChangesResults(PortEntry port_changes);
 
         const DirectoryChangesRange* directory_changes() const;
-        const PortData* port_changes() const;
+        const PortEntry* port_changes() const;
 
     private:
-        std::variant<std::monostate, DirectoryChangesRange, PortData> data_;
+        std::variant<std::monostate, DirectoryChangesRange, PortEntry> data_;
     };
 
     // Low-level wrapper around `::ReadDirectoryChangesW()`
@@ -274,16 +274,16 @@ namespace wi
         // from which directory it coming.
         // Once you will need to process data,
         // it's possible to construct `DirectoryChangesRange` from `buffer()`.
-        bool is_directory_change(const PortData& data) const;
+        bool is_directory_change(const PortEntry& data) const;
 
         // Checks whether `data` relates to this directory changes
         // and has no actual changes because of system's buffer overflow.
-        bool has_buffer_overflow(const PortData& data) const;
+        bool has_buffer_overflow(const PortEntry& data) const;
 
         // Returns true when `data` has non-empty set of changes
         // for this instance (i.e, DirectoryChangesRange contains
         // at least one item).
-        bool is_valid_directory_change(const PortData& data) const;
+        bool is_valid_directory_change(const PortEntry& data) const;
 
         const void* buffer() const;
 
@@ -326,7 +326,7 @@ namespace wi
     {
     }
 
-    inline DirectoryChangesResults::DirectoryChangesResults(PortData port_changes)
+    inline DirectoryChangesResults::DirectoryChangesResults(PortEntry port_changes)
         : data_(std::move(port_changes))
     {
     }
@@ -336,9 +336,9 @@ namespace wi
         return std::get_if<DirectoryChangesRange>(&data_);
     }
 
-    inline const PortData* DirectoryChangesResults::port_changes() const
+    inline const PortEntry* DirectoryChangesResults::port_changes() const
     {
-        return std::get_if<PortData>(&data_);
+        return std::get_if<PortEntry>(&data_);
     }
 } // namespace wi
 
@@ -406,8 +406,8 @@ namespace wi
     }
 
     /*explicit*/ inline DirectoryChangesIterator::DirectoryChangesIterator(
-        const void* buffer, PortData port_changes)
-        : DirectoryChangesIterator(buffer, static_cast<std::size_t>(port_changes.value))
+        const void* buffer, PortEntry port_changes)
+        : DirectoryChangesIterator(buffer, static_cast<std::size_t>(port_changes.bytes_transferred))
     {
     }
 
@@ -630,21 +630,21 @@ namespace wi
         }
     }
 
-    inline bool DirectoryChanges::is_directory_change(const PortData& data) const
+    inline bool DirectoryChanges::is_directory_change(const PortEntry& data) const
     {
-        return (data.key == dir_key_) && (data.ptr == &ov_);
+        return (data.completion_key == dir_key_) && (data.overlapped == &ov_);
     }
 
-    inline bool DirectoryChanges::has_buffer_overflow(const PortData& data) const
+    inline bool DirectoryChanges::has_buffer_overflow(const PortEntry& data) const
     {
-        const auto buffer_size = data.value;
+        const auto buffer_size = data.bytes_transferred;
         return is_directory_change(data)
             && (buffer_size == 0);
     }
 
-    inline bool DirectoryChanges::is_valid_directory_change(const PortData& data) const
+    inline bool DirectoryChanges::is_valid_directory_change(const PortEntry& data) const
     {
-        const auto buffer_size = data.value;
+        const auto buffer_size = data.bytes_transferred;
         return is_directory_change(data)
             && (buffer_size != 0);
     }

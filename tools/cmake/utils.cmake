@@ -1,5 +1,10 @@
 include(CMakePrintHelpers)
 
+macro(print_target_source_dir target)
+	get_target_property(${target}_DIR ${target} SOURCE_DIR)
+	cmake_print_variables(${target}_DIR)
+endmacro()
+
 macro(set_cpp20_standard)
 	set(CXX_STANDARD_REQUIRED ON)
 	set(CMAKE_CXX_STANDARD 20)

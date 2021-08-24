@@ -29,7 +29,7 @@ namespace
                 return {};
             }
 
-            std::suspend_always final_suspend()
+            std::suspend_always final_suspend() noexcept
             {
                 is_finished_ = true;
                 return {};
@@ -42,6 +42,10 @@ namespace
             }
 
             void return_void()
+            {
+            }
+
+            void unhandled_exception()
             {
             }
 
@@ -123,7 +127,7 @@ TEST(Coro, IoScheduler_Poll_One_Returns_Zero_When_Data_Exists_But_No_Task_Was_Cr
     ASSERT_FALSE(ec);
     coro::IoScheduler scheduler(*io_port);
 
-    io_port->post(PortData(1), ec);
+    io_port->post(PortEntry(1), ec);
     ASSERT_FALSE(ec);
     ASSERT_EQ(0u, scheduler.poll_one());
 
@@ -152,7 +156,7 @@ TEST(Coro, Coroutine_Is_Suspended_When_Waiting_For_Io_Task)
     ASSERT_TRUE(started);
     ASSERT_FALSE(task.is_finished());
 
-    io_port->post(PortData(1), ec);
+    io_port->post(PortEntry(1), ec);
     ASSERT_FALSE(ec);
     ASSERT_FALSE(task.is_finished());
 
@@ -167,8 +171,8 @@ TEST(Coro, Await_On_Io_Task_Returns_Posted_Data)
     ASSERT_FALSE(ec);
     coro::IoScheduler scheduler(*io_port);
 
-    const PortData post_data(2);
-    PortData await_data;
+    const PortEntry post_data(2);
+    PortEntry await_data;
 
     auto work = [&]() -> TestTask
     {
@@ -202,7 +206,7 @@ TEST(Coro, Its_Possible_To_Await_On_More_Then_One_Io_Task_In_The_Same_Coro)
         Wait_2_Finished,
     };
     State state = State::None;
-    PortData last_data;
+    PortEntry last_data;
 
     auto work = [&]() -> TestTask
     {
@@ -220,7 +224,7 @@ TEST(Coro, Its_Possible_To_Await_On_More_Then_One_Io_Task_In_The_Same_Coro)
     ASSERT_EQ(State::Entered, state);
     ASSERT_FALSE(task.is_finished());
 
-    io_port->post(PortData(3), ec);
+    io_port->post(PortEntry(3), ec);
     ASSERT_FALSE(ec);
 
     ASSERT_EQ(State::Entered, state);
@@ -228,7 +232,7 @@ TEST(Coro, Its_Possible_To_Await_On_More_Then_One_Io_Task_In_The_Same_Coro)
     ASSERT_EQ(State::Wait_1_Finished, state);
     ASSERT_FALSE(task.is_finished());
 
-    io_port->post(PortData(4), ec);
+    io_port->post(PortEntry(4), ec);
     ASSERT_FALSE(ec);
 
     ASSERT_EQ(State::Wait_1_Finished, state);
@@ -236,7 +240,7 @@ TEST(Coro, Its_Possible_To_Await_On_More_Then_One_Io_Task_In_The_Same_Coro)
     ASSERT_EQ(State::Wait_2_Finished, state);
     ASSERT_TRUE(task.is_finished());
 
-    ASSERT_EQ(PortData(4), last_data);
+    ASSERT_EQ(PortEntry(4), last_data);
 }
 
 TEST(Coro, Await_From_Multiple_Threads_Is_Safe)
@@ -283,7 +287,7 @@ TEST(Coro, Await_From_Multiple_Threads_Is_Safe)
     for (std::size_t i = 0; i < k_coro_threads_count; ++i)
     {
         ASSERT_EQ(i, finished_count);
-        io_port->post(PortData(1), ec);
+        io_port->post(PortEntry(1), ec);
         ASSERT_FALSE(ec);
         ASSERT_EQ(i, finished_count);
         ASSERT_EQ(1u, scheduler.poll_one());

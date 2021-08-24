@@ -28,18 +28,18 @@ namespace wi
 
             bool await_ready() const noexcept;
             void await_suspend(std::coroutine_handle<> awaiter) noexcept;
-            PortData await_resume() noexcept;
+            PortEntry await_resume() noexcept;
 
         private:
             friend class IoScheduler;
             // Any coroutine that awaits on the task will be resumed
             // with given `data` passed in
-            void set(PortData data);
+            void set(PortEntry data);
 
         private:
             IoScheduler* scheduler_;
             std::coroutine_handle<> coro_;
-            PortData data_;
+            PortEntry data_;
         };
 
     } // namespace coro
