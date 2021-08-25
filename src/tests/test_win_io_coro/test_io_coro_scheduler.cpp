@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <win_io_coro/io_coro_scheduler.h>
+#include <win_io_coro/coro_async_file.h>
 
 #include <memory>
 #include <vector>
@@ -8,6 +9,7 @@
 #include <chrono>
 
 using namespace wi;
+using namespace coro;
 
 namespace
 {
@@ -303,3 +305,35 @@ TEST(Coro, Await_From_Multiple_Threads_Is_Safe)
     }
 }
 
+TEST(Coro, Temp_File)
+{
+    std::error_code ec;
+    auto io_port = IoCompletionPort::make(ec);
+    ASSERT_FALSE(ec);
+    AsyncFile file = AsyncFile::open(*io_port, R"(K:\temp.txt)", ec);
+    ASSERT_FALSE(ec);
+
+    auto work = [&]() -> TestTask
+    {
+        ReadResult result1 = co_await file.read(0, 10);
+        ReadResult result2 = co_await file.read(3, 10);
+
+        [&] {ASSERT_FALSE(result1.error); }();
+        [&] {ASSERT_FALSE(result2.error); }();
+        auto data1 = result1.buffer.GetData();
+        auto data2 = result2.buffer.GetData();
+        [&] {ASSERT_EQ(std::size_t(10), data1.size()); }();
+        [&] {ASSERT_EQ(std::size_t(10), data2.size()); }();
+
+        co_return;
+    };
+    auto task = work();
+    std::size_t handled_count = 0;
+    // 2 reads were issued.
+    while (handled_count < 2)
+    {
+        handled_count += HandleIOCP_Once(*io_port);
+    }
+
+    ASSERT_TRUE(task.is_finished());
+}
