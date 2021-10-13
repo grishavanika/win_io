@@ -275,12 +275,11 @@ struct State_SendSome : State_Log
         WSABUF send_buffer{};
         send_buffer.buf = self._data.data();
         send_buffer.len = ULONG(self._data.size());
-        WSAOVERLAPPED ov_send{};
         const int error = ::WSASend(self._socket
             , &send_buffer, 1
             , nullptr/*bytes_send*/
             , 0/*flags*/
-            , &ov_send, nullptr);
+            , &self._ov, nullptr);
         if (error == 0)
         {
             // Completed synchronously.
