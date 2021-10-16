@@ -1,0 +1,6 @@
+[submodule "third_party/deps/gtest-src"]
+	path = third_party/deps/gtest-src
+	url = https://github.com/google/googletest.git
+[submodule "third_party/deps/unifex-src"]
+	path = third_party/deps/unifex-src
+	url = https://github.com/facebookexperimental/libunifex.git

@@ -3,4 +3,4 @@
 .vs/*
 .vscode/*
 build*/*
-
+third_party/deps/*

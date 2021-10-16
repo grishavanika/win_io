@@ -1,13 +1,17 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
-#define WIN32_LEAN_AND_MEAN
-#define _WINSOCKAPI_
+#if !defined(WIN32_LEAN_AND_MEAN)
+#  define WIN32_LEAN_AND_MEAN
+#endif
+#if !defined(_WINSOCKAPI_)
+#  define _WINSOCKAPI_
+#endif
 #include <Mswsock.h>
 
 #pragma comment(lib, "Ws2_32.lib")
 
-#include "io_completion_port.h"
+#include <win_io/detail/io_completion_port.h>
 
 #if defined(NDEBUG)
 #  undef NDEBUG
@@ -58,6 +62,8 @@ protected:
     {
 #if (XX_ENABLE_STATE_LOGS())
         printf("[State] '%s' - %s.\n", _name, debug);
+#else
+        (void)debug;
 #endif
     }
 };
@@ -97,6 +103,8 @@ protected:
     {
 #if (XX_ENABLE_SENDERS_LOGS())
         printf("[State] '%s' - %s.\n", _name, debug);
+#else
+        (void)debug;
 #endif
     }
 };
@@ -554,6 +562,7 @@ int main()
     char send_data[] = "Test";
     char receive_data[1024]{};
 
+    // RUN python.exe tpc_server.py.
     auto logic = [&]()
     {
         return unifex::sequence(
@@ -563,12 +572,12 @@ int main()
                     printf("Connected!.\n");
                 })
             , socket->async_send_some(send_data)
-                | unifex::then([](std::span<char> data)
+                    | unifex::then([](std::span<char> data)
                 {
                     printf("Sent %i bytes!.\n", int(data.size()));
                 })
             , socket->async_receive_some(receive_data)
-                | unifex::then([](std::span<char> buffer)
+                    | unifex::then([](std::span<char> buffer)
                 {
                     printf("Received %i bytes: %.*s!.\n"
                         , int(buffer.size()), int(buffer.size()), buffer.data());
@@ -583,7 +592,6 @@ int main()
     while (!finish)
     {
         wi::PortEntry entries[4];
-        std::error_code ec;
         for (const wi::PortEntry& entry : iocp->get_many(entries, ec))
         {
             IOCP_Overlapped* ov = static_cast<IOCP_Overlapped*>(entry.overlapped);

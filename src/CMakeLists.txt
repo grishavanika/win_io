@@ -6,4 +6,4 @@ if (${has_coro_support})
 endif()
 
 add_subdirectory(tests)
-add_subdirectory(utils)
+add_subdirectory(examples)

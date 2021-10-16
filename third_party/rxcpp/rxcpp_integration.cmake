@@ -1,5 +1,6 @@
 # RxCpp integration
 
+message("[ ] Trying to integrate RxCpp with find_path().")
 find_path(rxcpp_INCLUDE_DIR
     NAMES rxcpp/rx.hpp 
     DOC "rxcpp library header files")
@@ -17,5 +18,5 @@ if (EXISTS "${rxcpp_INCLUDE_DIR}")
         _HAS_DEPRECATED_RESULT_OF)
 
 else ()
-    message(FATAL_ERROR "No rxcpp found")
+    message("[x] No RxCpp found.")
 endif ()

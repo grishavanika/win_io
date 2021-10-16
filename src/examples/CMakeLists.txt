@@ -1,0 +1,10 @@
+
+add_subdirectory(fs_changes_print)
+add_subdirectory(fs_changes_action)
+add_subdirectory(async_TCP_IOCP_senders_receivers)
+if (TARGET fs_changes_print)
+    set_target_properties(fs_changes_print PROPERTIES FOLDER utils)
+endif()
+if (TARGET fs_changes_action)
+    set_target_properties(fs_changes_action PROPERTIES FOLDER utils)
+endif()
