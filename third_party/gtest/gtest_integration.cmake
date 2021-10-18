@@ -66,11 +66,11 @@ macro(setup_gtest_from_git)
     endif ()
 
     # Disable overloads for std::tr1::tuple type.
-    target_compile_definitions(gmock_main PUBLIC
+    target_compile_definitions(gmock PUBLIC
         -DGTEST_HAS_TR1_TUPLE=0)
 
     if (clang_on_msvc)
-        target_compile_options(gmock_main PUBLIC
+        target_compile_options(gmock PUBLIC
             -Wno-undef
             -Wno-exit-time-destructors
             -Wno-format-nonliteral
@@ -87,9 +87,8 @@ macro(setup_gtest_from_git)
     endif ()
 
     add_library(GTest_Integrated INTERFACE)
-    # target_link_libraries(GTest_Integrated INTERFACE gmock_main)
+    target_link_libraries(GTest_Integrated INTERFACE gmock)
 
-    # set_target_properties(gmock_main PROPERTIES FOLDER third_party)
     set_target_properties(gmock PROPERTIES FOLDER third_party)
     set_target_properties(gtest PROPERTIES FOLDER third_party)
 

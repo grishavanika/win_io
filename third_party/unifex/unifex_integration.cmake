@@ -20,8 +20,19 @@ macro(setup_unifex_from_git)
 
     print_target_source_dir(unifex)
 
+    if (clang_on_msvc)
+        target_compile_definitions(unifex PUBLIC
+            UNIFEX_NO_COROUTINES)
+    endif()
+
     add_library(unifex_Integrated INTERFACE)
     target_link_libraries(unifex_Integrated INTERFACE unifex)
+
+    if (clang_on_msvc)
+        target_compile_options(unifex_Integrated INTERFACE
+            -Wno-documentation-unknown-command
+            -Wno-shadow-field-in-constructor)
+    endif ()
 
 endmacro()
 

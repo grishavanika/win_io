@@ -1,5 +1,5 @@
-#include <winsock2.h>
-#include <ws2tcpip.h>
+#include <WinSock2.h>
+#include <WS2tcpip.h>
 
 #if !defined(WIN32_LEAN_AND_MEAN)
 #  define WIN32_LEAN_AND_MEAN
@@ -7,7 +7,7 @@
 #if !defined(_WINSOCKAPI_)
 #  define _WINSOCKAPI_
 #endif
-#include <Mswsock.h>
+#include <MSWSock.h>
 
 #pragma comment(lib, "Ws2_32.lib")
 
@@ -587,36 +587,32 @@ struct Operation_Write : Operation_Log
         , _receiver(std::move(receiver))
         , _socket(socket)
         , _data(data)
-        , _write_some_op()
-        , _written_bytes(0) { }
+        , _written_bytes(0)
+        , _write_some_op() { }
 
     struct Receiver_WriteSomePart
     {
         Operation_Write& _self;
 
-        // #XXX: simple `set_value(std::size_t) && noexcept` does not compile. Why?
-        friend void tag_invoke(unifex::tag_t<unifex::set_value>
-            , Receiver_WriteSomePart&& self, std::size_t bytes_transferred) noexcept
+        void set_value(std::size_t bytes_transferred) noexcept
         {
-            self._self.on_wrote_part(bytes_transferred);
+            _self.on_wrote_part(bytes_transferred);
         }
 
-        friend void tag_invoke(unifex::tag_t<unifex::set_error>
-            , Receiver_WriteSomePart&& self, std::error_code ec) noexcept
+        void set_error(std::error_code ec) noexcept
         {
-            self._self.on_wrote_part_error(ec);
+            _self.on_wrote_part_error(ec);
         }
 
-        friend void tag_invoke(unifex::tag_t<unifex::set_done>
-            , Receiver_WriteSomePart&&) noexcept
+        // libunifex does not compile without this. Bug?
+        void set_error(std::exception_ptr) noexcept
         {
             assert(false);
+            _self.on_wrote_part_error(std::error_code(-1));
         }
 
-        // #XXX: does not compiles without this. MSVC bug?
-        friend void tag_invoke(auto, Receiver_WriteSomePart&&, auto&&...) noexcept
+        void set_done() noexcept
         {
-            static_assert(false);
             assert(false);
         }
     };
