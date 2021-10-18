@@ -4,6 +4,7 @@
 #if !defined(WIN32_LEAN_AND_MEAN)
 #  define WIN32_LEAN_AND_MEAN
 #endif
+#include <Windows.h>
 #if !defined(_WINSOCKAPI_)
 #  define _WINSOCKAPI_
 #endif
@@ -13,11 +14,6 @@
 #pragma comment(lib, "Mswsock.lib")
 
 #include <win_io/detail/io_completion_port.h>
-
-#if defined(NDEBUG)
-#  undef NDEBUG
-#endif
-#include <cassert>
 
 #include <unifex/sender_concepts.hpp>
 #include <unifex/sync_wait.hpp>
@@ -33,6 +29,24 @@
 #include <unifex/inline_scheduler.hpp>
 #include <unifex/on.hpp>
 
+#include <exception> // Not needed. For libunifex.
+
+#include <system_error>
+#include <optional>
+#include <utility>
+#include <type_traits>
+#include <span>
+#include <limits>
+
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+
+#if defined(NDEBUG)
+#  undef NDEBUG
+#endif
+#include <cassert>
+
 #define XX_ENABLE_OPERATION_LOGS() 0
 #define XX_ENABLE_SENDERS_LOGS() 0
 
@@ -47,7 +61,7 @@ struct IOCP_Overlapped : OVERLAPPED
     void* _user_data = nullptr;
 };
 
-// Hack to make set_void() (no T) work with unifex::then(). Bug ?
+// Hack to make set_void() (no T) work with unifex::then(). Bug?
 using void_ = struct {};
 
 struct Operation_Log
@@ -55,36 +69,22 @@ struct Operation_Log
     Operation_Log(const Operation_Log&) = delete;
     Operation_Log& operator=(const Operation_Log&) = delete;
     Operation_Log& operator=(Operation_Log&&) = delete;
-    // Needed for composition. Someone can move-construct
-    // Operation state into own/internal percistent storage
-    // with a call to unifex::connect().
-    Operation_Log(Operation_Log&&) noexcept = default;
+    Operation_Log(Operation_Log&&) = delete;
 
 protected:
+    ~Operation_Log() noexcept = default;
+#if (XX_ENABLE_OPERATION_LOGS())
     const char* _name = nullptr;
-
-    Operation_Log(const char* name)
-        : _name(name)
+    explicit Operation_Log(const char* name) noexcept
+        : _name(name) { }
+    void log([[maybe_unused]] const char* debug)
     {
-#if (XX_ENABLE_OPERATION_LOGS())
-        printf("[State] '%s' c-tor.\n", _name);
-#endif
+        printf("[State ][%p] '%s' - %s.\n", static_cast<void*>(this), _name, debug);
     }
-    ~Operation_Log()
-    {
-#if (XX_ENABLE_OPERATION_LOGS())
-        printf("[State] '%s' d-tor.\n", _name);
-#endif
-    }
-
-    void log(const char* debug)
-    {
-#if (XX_ENABLE_OPERATION_LOGS())
-        printf("[State] '%s' - %s.\n", _name, debug);
 #else
-        (void)debug;
+    explicit Operation_Log(const char*) noexcept { }
+    void log(const char*) { }
 #endif
-    }
 };
 
 template<typename V, typename E>
@@ -103,29 +103,19 @@ struct Sender_LogSimple
     Sender_LogSimple(Sender_LogSimple&&) noexcept = default;
 
 protected:
+    ~Sender_LogSimple() noexcept = default;
+#if (XX_ENABLE_SENDERS_LOGS())
     const char* _name = nullptr;
-
-    Sender_LogSimple(const char* name)
-        : _name(name)
-    {
-#if (XX_ENABLE_SENDERS_LOGS())
-        printf("[Sender] '%s' c-tor.\n", _name);
-#endif
-    }
-    ~Sender_LogSimple() noexcept
-    {
-#if (XX_ENABLE_SENDERS_LOGS())
-        printf("[Sender] '%s' d-tor.\n", _name);
-#endif
-    }
+    explicit Sender_LogSimple(const char* name) noexcept
+        : _name(name) {}
     void log(const char* debug)
     {
-#if (XX_ENABLE_SENDERS_LOGS())
-        printf("[State] '%s' - %s.\n", _name, debug);
-#else
-        (void)debug;
-#endif
+        printf("[Sender][%p] '%s' - %s.\n", static_cast<void*>(this), _name, debug);
     }
+#else
+    explicit Sender_LogSimple(const char*) noexcept {}
+    void log(const char*) { }
+#endif
 };
 
 struct Endpoint_IPv4
@@ -137,7 +127,7 @@ struct Endpoint_IPv4
     // `src` is in dotted-decimal format, "ddd.ddd.ddd.ddd".
     static std::optional<Endpoint_IPv4> from_string(const char* src, std::uint16_t port_host)
     {
-        struct in_addr ipv4{};
+        struct in_addr ipv4 {};
         static_assert(sizeof(ipv4.s_addr) == sizeof(std::uint32_t));
         const int ok = inet_pton(AF_INET, src, &ipv4);
         if (ok == 1)
@@ -154,10 +144,10 @@ struct Endpoint_IPv4
 template<typename Receiver>
 struct Operation_Connect : Operation_Log
 {
-    explicit Operation_Connect(Receiver&& receiver, SOCKET socket, Endpoint_IPv4 endpoint)
+    explicit Operation_Connect(Receiver&& receiver, SOCKET socket, Endpoint_IPv4 endpoint) noexcept
         : Operation_Log("connect")
         , _receiver(std::move(receiver))
-        , _ov{{}, &Operation_Connect::on_connected, this}
+        , _ov{ {}, &Operation_Connect::on_connected, this }
         , _socket(socket)
         , _endpoint(endpoint) {}
 
@@ -166,7 +156,7 @@ struct Operation_Connect : Operation_Log
     SOCKET _socket = INVALID_SOCKET;
     Endpoint_IPv4 _endpoint;
 
-    static void on_connected(void* user_data, const wi::PortEntry& entry, std::error_code ec)
+    static void on_connected(void* user_data, const wi::PortEntry& entry, std::error_code ec) noexcept
     {
         assert(user_data);
         Operation_Connect& self = *static_cast<Operation_Connect*>(user_data);
@@ -208,7 +198,7 @@ struct Operation_Connect : Operation_Log
         }
 
         { // Required by ConnectEx().
-            struct sockaddr_in local_address{};
+            struct sockaddr_in local_address {};
             local_address.sin_family = AF_INET;
             local_address.sin_addr.s_addr = INADDR_ANY;
             local_address.sin_port = 0;
@@ -218,7 +208,7 @@ struct Operation_Connect : Operation_Log
             assert(error == 0);
         }
 
-        struct sockaddr_in connect_to{};
+        struct sockaddr_in connect_to {};
         connect_to.sin_family = AF_INET;
         connect_to.sin_port = self._endpoint._port_network;
         connect_to.sin_addr.s_addr = self._endpoint._ip_network;
@@ -280,10 +270,10 @@ struct Sender_Connect : Sender_LogSimple<void_, std::error_code>
 template<typename Receiver>
 struct Operation_WriteSome : Operation_Log
 {
-    explicit Operation_WriteSome(Receiver&& receiver, SOCKET socket, std::span<char> data)
+    explicit Operation_WriteSome(Receiver&& receiver, SOCKET socket, std::span<char> data) noexcept
         : Operation_Log("write_some")
         , _receiver(std::move(receiver))
-        , _ov{{}, &Operation_WriteSome::on_sent, this}
+        , _ov{ {}, &Operation_WriteSome::on_sent, this }
         , _socket(socket)
         , _data(data) { }
 
@@ -292,7 +282,7 @@ struct Operation_WriteSome : Operation_Log
     SOCKET _socket = INVALID_SOCKET;
     std::span<char> _data;
 
-    static void on_sent(void* user_data, const wi::PortEntry& entry, std::error_code ec)
+    static void on_sent(void* user_data, const wi::PortEntry& entry, std::error_code ec) noexcept
     {
         assert(user_data);
         Operation_WriteSome& self = *static_cast<Operation_WriteSome*>(user_data);
@@ -355,7 +345,7 @@ struct Operation_WriteSome : Operation_Log
 struct Sender_WriteSome : Sender_LogSimple<std::size_t, std::error_code>
 {
     explicit Sender_WriteSome(SOCKET socket, std::span<char> data) noexcept
-        : Sender_LogSimple<std::size_t, std::error_code>("send_some")
+        : Sender_LogSimple<std::size_t, std::error_code>("write_some")
         , _socket(socket)
         , _data(data) { }
 
@@ -376,10 +366,10 @@ struct Sender_WriteSome : Sender_LogSimple<std::size_t, std::error_code>
 template<typename Receiver>
 struct Operation_ReadSome : Operation_Log
 {
-    explicit Operation_ReadSome(Receiver&& receiver, SOCKET socket, std::span<char> buffer)
-        : Operation_Log("receive_some")
+    explicit Operation_ReadSome(Receiver&& receiver, SOCKET socket, std::span<char> buffer) noexcept
+        : Operation_Log("read_some")
         , _receiver(std::move(receiver))
-        , _ov{{}, &Operation_ReadSome::on_received, this}
+        , _ov{ {}, &Operation_ReadSome::on_received, this }
         , _socket(socket)
         , _buffer(buffer)
         , _flags(0) { }
@@ -390,7 +380,7 @@ struct Operation_ReadSome : Operation_Log
     std::span<char> _buffer;
     DWORD _flags;
 
-    static void on_received(void* user_data, const wi::PortEntry& entry, std::error_code ec)
+    static void on_received(void* user_data, const wi::PortEntry& entry, std::error_code ec) noexcept
     {
         assert(user_data);
         Operation_ReadSome& self = *static_cast<Operation_ReadSome*>(user_data);
@@ -453,7 +443,7 @@ struct Operation_ReadSome : Operation_Log
 
 struct Sender_ReadSome : Sender_LogSimple<std::size_t, std::error_code>
 {
-    Sender_ReadSome(SOCKET socket, std::span<char> buffer) noexcept
+    explicit Sender_ReadSome(SOCKET socket, std::span<char> buffer) noexcept
         : Sender_LogSimple<size_t, std::error_code>("read_some")
         , _socket(socket)
         , _buffer(buffer) { }
@@ -474,12 +464,12 @@ struct Sender_ReadSome : Sender_LogSimple<std::size_t, std::error_code>
 
 template<typename Receiver
     , typename _Async_TCPSocket /*= Async_TCPSocket*/>
-struct Operation_Accept : Operation_Log
+    struct Operation_Accept : Operation_Log
 {
-    explicit Operation_Accept(Receiver&& receiver, SOCKET listen_socket, wi::IoCompletionPort& iocp)
-        : Operation_Log("receive_some")
+    explicit Operation_Accept(Receiver&& receiver, SOCKET listen_socket, wi::IoCompletionPort& iocp) noexcept
+        : Operation_Log("accept")
         , _receiver(std::move(receiver))
-        , _ov{{}, &Operation_Accept::on_accepted, this}
+        , _ov{ {}, &Operation_Accept::on_accepted, this }
         , _listen_socket(listen_socket)
         , _iocp(&iocp)
         , _buffer{}
@@ -497,7 +487,7 @@ struct Operation_Accept : Operation_Log
     char _buffer[2 * kAddressLength]{};
     _Async_TCPSocket _client;
 
-    static void on_accepted(void* user_data, const wi::PortEntry& entry, std::error_code ec)
+    static void on_accepted(void* user_data, const wi::PortEntry& entry, std::error_code ec) noexcept
     {
         assert(user_data);
         Operation_Accept& self = *static_cast<Operation_Accept*>(user_data);
@@ -520,7 +510,7 @@ struct Operation_Accept : Operation_Log
             , Operation_Accept::kAddressLength
             , )
 #endif
-        
+
         const int error = ::setsockopt(self._client._socket, SOL_SOCKET, SO_UPDATE_ACCEPT_CONTEXT
             , reinterpret_cast<char*>(&self._listen_socket)
             , sizeof(self._listen_socket));
@@ -605,9 +595,9 @@ struct Async_TCPSocket
     SOCKET _socket = INVALID_SOCKET;
     wi::IoCompletionPort* _iocp = nullptr;
 
-    explicit Async_TCPSocket() = default;
+    explicit Async_TCPSocket() noexcept = default;
 
-    static std::optional<Async_TCPSocket> make(wi::IoCompletionPort& iocp, std::error_code& ec)
+    static std::optional<Async_TCPSocket> make(wi::IoCompletionPort& iocp, std::error_code& ec) noexcept
     {
         ec = std::error_code();
         WSAPROTOCOL_INFOW* default_protocol = nullptr;
@@ -650,37 +640,37 @@ struct Async_TCPSocket
         return std::make_optional(std::move(socket));
     }
 
-    Sender_Connect async_connect(Endpoint_IPv4 endpoint)
+    Sender_Connect async_connect(Endpoint_IPv4 endpoint) noexcept
     {
         return Sender_Connect{_socket, endpoint};
     }
 
     // https://www.boost.org/doc/libs/1_77_0/doc/html/boost_asio/reference/basic_socket_acceptor/async_accept/overload3.html.
-    Sender_Accept<Async_TCPSocket> async_accept()
+    Sender_Accept<Async_TCPSocket> async_accept() noexcept
     {
-        return Sender_Accept<Async_TCPSocket>{_socket, *_iocp};
+        return Sender_Accept<Async_TCPSocket>{_socket, * _iocp};
     }
 
     // https://www.boost.org/doc/libs/1_77_0/doc/html/boost_asio/reference/basic_stream_socket/async_write_some.html.
     // See also async_write().
-    Sender_WriteSome async_write_some(std::span<char> data)
+    Sender_WriteSome async_write_some(std::span<char> data) noexcept
     {
         return Sender_WriteSome{_socket, data};
     }
 
     // https://www.boost.org/doc/libs/1_77_0/doc/html/boost_asio/reference/basic_stream_socket/async_read_some.html.
     // See also async_read().
-    Sender_ReadSome async_read_some(std::span<char> buffer)
+    Sender_ReadSome async_read_some(std::span<char> buffer) noexcept
     {
         return Sender_ReadSome{_socket, buffer};
     }
 
-    ~Async_TCPSocket()
+    ~Async_TCPSocket() noexcept
     {
         disconnect();
     }
 
-    void disconnect()
+    void disconnect() noexcept
     {
         SOCKET socket = std::exchange(_socket, INVALID_SOCKET);
         if (socket == INVALID_SOCKET)
@@ -712,7 +702,7 @@ struct Async_TCPSocket
         return *this;
     }
 private:
-    explicit Async_TCPSocket(SOCKET socket, wi::IoCompletionPort& iocp)
+    explicit Async_TCPSocket(SOCKET socket, wi::IoCompletionPort& iocp) noexcept
         : _socket(socket)
         , _iocp(&iocp)
     {
@@ -725,7 +715,7 @@ private:
 template<typename Receiver>
 struct Operation_Write : Operation_Log
 {
-    explicit Operation_Write(Receiver&& receiver, Async_TCPSocket& socket, std::span<char> data)
+    explicit Operation_Write(Receiver&& receiver, Async_TCPSocket& socket, std::span<char> data) noexcept
         : Operation_Log("write")
         , _receiver(std::move(receiver))
         , _socket(socket)
@@ -773,7 +763,7 @@ struct Operation_Write : Operation_Log
     {
         Op* op = new(static_cast<void*>(&_write_some_op)) Op(unifex::connect(
             _socket.async_write_some(_data.last(to_send))
-                , Receiver_WriteSomePart{*this}));
+            , Receiver_WriteSomePart{*this}));
         unifex::start(*op);
     }
 
@@ -828,13 +818,13 @@ struct Sender_Write : Sender_LogSimple<std::size_t, std::error_code>
 
 // #XXX: May crash with stack overflow. See async_read() with
 // unifex::on(trampoline_scheduler(), ...) that fixes that.
-static Sender_Write async_write(Async_TCPSocket& tcp_socket, std::span<char> data)
+static Sender_Write async_write(Async_TCPSocket& tcp_socket, std::span<char> data) noexcept
 {
-    return Sender_Write{tcp_socket, data};
+    return Sender_Write{ tcp_socket, data };
 }
 
 template<typename Scheduler>
-static auto async_read(Async_TCPSocket& tcp_socket, std::span<char> data, Scheduler scheduler)
+static auto async_read(Async_TCPSocket& tcp_socket, std::span<char> data, Scheduler scheduler) noexcept
 {
     struct State
     {
@@ -877,6 +867,11 @@ struct StopReceiver
         r.finish = true;
     }
 };
+
+#include <vector>
+#include <chrono>
+
+#include <cstring>
 
 int main()
 {
@@ -1019,5 +1014,5 @@ int main()
     client_socket->disconnect();
     server_socket->disconnect();
 
-    WSACleanup();
+    ::WSACleanup();
 }
