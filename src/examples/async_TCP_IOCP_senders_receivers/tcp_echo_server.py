@@ -23,15 +23,11 @@ def server(host='127.0.0.1', port=60260):
         request = c.recv(4096)
 
         if not request:
-          print("[-] Not Received")
           break
 
-        print("[+] Received", repr(request.decode('utf-8')))
+        #print("[+] Received", repr(request.decode('utf-8')))
 
-        #response = input("[+] Enter string : ")
-        response = "RESPONSE"
-        c.sendall(response.encode('utf-8'))
-        print("[+] Sending to {0}:{1}".format(addr[0], addr[1]))
+        c.sendall(request)
 
 if __name__ == "__main__":
   server()
