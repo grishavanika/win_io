@@ -48,8 +48,72 @@
 #endif
 #include <cassert>
 
-#define XX_ENABLE_OPERATION_LOGS() 0
-#define XX_ENABLE_SENDERS_LOGS() 0
+// Few helpers to simplify "standard" definitions of Senders
+// (one overload of set_value() and set_error()) and
+// Operation states (e.g., no copies are allowed). Mostly
+// to ensure this is true for learning purpose.
+#define XX_ENABLE_LOGS() 0
+
+struct MoveOnly_Named
+{
+    MoveOnly_Named(const MoveOnly_Named&) = delete;
+    MoveOnly_Named& operator=(const MoveOnly_Named&) = delete;
+    MoveOnly_Named& operator=(MoveOnly_Named&&) = delete;
+    // Needed.
+    MoveOnly_Named(MoveOnly_Named&&) noexcept = default;
+
+protected:
+    ~MoveOnly_Named() noexcept = default;
+#if (XX_ENABLE_LOGS())
+    const char* _name = nullptr;
+    explicit MoveOnly_Named(const char* name) noexcept
+        : _name(name) {}
+    void log(const char* debug)
+    {
+        printf("[%p] '%s' - %s.\n", static_cast<void*>(this), _name, debug);
+    }
+#else
+    explicit MoveOnly_Named(const char*) noexcept {}
+    void log(const char*) { }
+#endif
+};
+
+struct Operation_Log : MoveOnly_Named
+{
+    // Let say this is unmovable. See when this may be needed.
+    // (E.g. move *before* operation's start()).
+    Operation_Log(Operation_Log&&) = delete;
+
+protected:
+    using MoveOnly_Named::MoveOnly_Named;
+};
+
+template<typename V, typename E>
+struct Sender_LogSimple : MoveOnly_Named
+{
+    template<template <typename...> class Variant, template <typename...> class Tuple>
+    using value_types = Variant<Tuple<V>>;
+    template <template <typename...> class Variant>
+    using error_types = Variant<E>;
+    static constexpr bool sends_done = true;
+
+protected:
+    using MoveOnly_Named::MoveOnly_Named;
+};
+
+template<typename E>
+struct Sender_LogSimple<void, E> : MoveOnly_Named
+{
+    template<template <typename...> class Variant, template <typename...> class Tuple>
+    using value_types = Variant<Tuple<>>;
+                        //      ^^^^^^^ void
+    template <template <typename...> class Variant>
+    using error_types = Variant<E>;
+    static constexpr bool sends_done = true;
+
+protected:
+    using MoveOnly_Named::MoveOnly_Named;
+};
 
 static constexpr wi::WinULONG_PTR kClientKeyIOCP = 1;
 
@@ -60,63 +124,6 @@ struct IOCP_Overlapped : OVERLAPPED
     using Handle = void (*)(void* user_data, const wi::PortEntry& /*entry*/, std::error_code /*ec*/);
     Handle _callback = nullptr;
     void* _user_data = nullptr;
-};
-
-// Hack to make set_void() (no T) work with unifex::then(). Bug?
-using void_ = struct {};
-
-struct Operation_Log
-{
-    Operation_Log(const Operation_Log&) = delete;
-    Operation_Log& operator=(const Operation_Log&) = delete;
-    Operation_Log& operator=(Operation_Log&&) = delete;
-    Operation_Log(Operation_Log&&) = delete;
-
-protected:
-    ~Operation_Log() noexcept = default;
-#if (XX_ENABLE_OPERATION_LOGS())
-    const char* _name = nullptr;
-    explicit Operation_Log(const char* name) noexcept
-        : _name(name) { }
-    void log([[maybe_unused]] const char* debug)
-    {
-        printf("[State ][%p] '%s' - %s.\n", static_cast<void*>(this), _name, debug);
-    }
-#else
-    explicit Operation_Log(const char*) noexcept { }
-    void log(const char*) { }
-#endif
-};
-
-template<typename V, typename E>
-struct Sender_LogSimple
-{
-    template<template <typename...> class Variant, template <typename...> class Tuple>
-    using value_types = Variant<Tuple<V>>;
-    template <template <typename...> class Variant>
-    using error_types = Variant<E>;
-    static constexpr bool sends_done = true;
-
-    Sender_LogSimple(const Sender_LogSimple&) = delete;
-    Sender_LogSimple& operator=(const Sender_LogSimple&) = delete;
-    Sender_LogSimple& operator=(Sender_LogSimple&&) = delete;
-    // Needed.
-    Sender_LogSimple(Sender_LogSimple&&) noexcept = default;
-
-protected:
-    ~Sender_LogSimple() noexcept = default;
-#if (XX_ENABLE_SENDERS_LOGS())
-    const char* _name = nullptr;
-    explicit Sender_LogSimple(const char* name) noexcept
-        : _name(name) {}
-    void log(const char* debug)
-    {
-        printf("[Sender][%p] '%s' - %s.\n", static_cast<void*>(this), _name, debug);
-    }
-#else
-    explicit Sender_LogSimple(const char*) noexcept {}
-    void log(const char*) { }
-#endif
 };
 
 struct Endpoint_IPv4
@@ -176,7 +183,7 @@ struct Operation_Connect : Operation_Log
         const int error = ::setsockopt(self._socket, SOL_SOCKET, SO_UPDATE_CONNECT_CONTEXT, nullptr, 0);
         assert(error == 0);
 
-        unifex::set_value(std::move(self._receiver), void_());
+        unifex::set_value(std::move(self._receiver));
     }
 
     friend void tag_invoke(unifex::tag_t<unifex::start>, Operation_Connect& self) noexcept
@@ -246,10 +253,10 @@ struct Operation_Connect : Operation_Log
     }
 };
 
-struct Sender_Connect : Sender_LogSimple<void_, std::error_code>
+struct Sender_Connect : Sender_LogSimple<void, std::error_code>
 {
     explicit Sender_Connect(SOCKET socket, Endpoint_IPv4 endpoint) noexcept
-        : Sender_LogSimple<void_, std::error_code>("connect")
+        : Sender_LogSimple<void, std::error_code>("connect")
         , _socket(socket)
         , _endpoint(endpoint) { }
 
@@ -1164,7 +1171,7 @@ int main()
     {
         return unifex::sequence(
             client_socket->async_connect(*endpoint)
-                | unifex::then([](void_)
+                | unifex::then([]()
             {
                 printf("[Client] Connected.\n");
             })
