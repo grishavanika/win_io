@@ -29,8 +29,6 @@
 #include <unifex/inline_scheduler.hpp>
 #include <unifex/on.hpp>
 
-#include <exception> // Not needed. For libunifex.
-
 #include <system_error>
 #include <optional>
 #include <utility>
@@ -823,32 +821,20 @@ struct Operation_SelectOnceInN : Operation_Log
     {
         Operation_SelectOnceInN* _self = nullptr;
 
-        // #XXX: should be generic of terms Scheduler & Fallback.
-        void set_value() noexcept
+        void set_value() && noexcept
         {
-            _self->destroy_op();
+            _self->destroy_state();
             unifex::set_value(std::move(_self->_receiver));
         }
-        void set_error(auto&& e1) noexcept
+        template<typename E>
+        void set_error(E&& arg) && noexcept
         {
-            _self->destroy_op();
-            if constexpr (requires { unifex::set_value(std::move(_self->_receiver), e1); })
-            {
-                unifex::set_value(std::move(_self->_receiver), e1);
-            }
-            else if constexpr (requires { unifex::set_value(std::move(_self->_receiver)); })
-            {
-                unifex::set_value(std::move(_self->_receiver));
-            }
-            else
-            {
-                static_assert(sizeof(Receiver) == 0
-                    , "This temporary code is missing generic handling of Receiver.");
-            }
+            _self->destroy_state();
+            unifex::set_error(std::move(_self->_receiver), std::forward<E>(arg));
         }
-        void set_done() noexcept
+        void set_done() && noexcept
         {
-            _self->destroy_op();
+            _self->destroy_state();
             unifex::set_done(std::move(_self->_receiver));
         }
     };
@@ -869,7 +855,7 @@ struct Operation_SelectOnceInN : Operation_Log
 
     Op_State _op;
 
-    void destroy_op()
+    void destroy_state()
     {
         if (void* scheduler = std::get_if<1>(&_op))
         {
