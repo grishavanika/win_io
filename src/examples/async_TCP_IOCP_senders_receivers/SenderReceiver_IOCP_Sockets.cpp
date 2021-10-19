@@ -37,6 +37,7 @@
 #include <type_traits>
 #include <span>
 #include <limits>
+#include <variant>
 
 #include <cstddef>
 #include <cstdint>
@@ -147,7 +148,7 @@ struct Operation_Connect : Operation_Log
     explicit Operation_Connect(Receiver&& receiver, SOCKET socket, Endpoint_IPv4 endpoint) noexcept
         : Operation_Log("connect")
         , _receiver(std::move(receiver))
-        , _ov{ {}, &Operation_Connect::on_connected, this }
+        , _ov{{}, &Operation_Connect::on_connected, this}
         , _socket(socket)
         , _endpoint(endpoint) {}
 
@@ -273,7 +274,7 @@ struct Operation_WriteSome : Operation_Log
     explicit Operation_WriteSome(Receiver&& receiver, SOCKET socket, std::span<char> data) noexcept
         : Operation_Log("write_some")
         , _receiver(std::move(receiver))
-        , _ov{ {}, &Operation_WriteSome::on_sent, this }
+        , _ov{{}, &Operation_WriteSome::on_sent, this}
         , _socket(socket)
         , _data(data) { }
 
@@ -369,7 +370,7 @@ struct Operation_ReadSome : Operation_Log
     explicit Operation_ReadSome(Receiver&& receiver, SOCKET socket, std::span<char> buffer) noexcept
         : Operation_Log("read_some")
         , _receiver(std::move(receiver))
-        , _ov{ {}, &Operation_ReadSome::on_received, this }
+        , _ov{{}, &Operation_ReadSome::on_received, this}
         , _socket(socket)
         , _buffer(buffer)
         , _flags(0) { }
@@ -469,7 +470,7 @@ template<typename Receiver
     explicit Operation_Accept(Receiver&& receiver, SOCKET listen_socket, wi::IoCompletionPort& iocp) noexcept
         : Operation_Log("accept")
         , _receiver(std::move(receiver))
-        , _ov{ {}, &Operation_Accept::on_accepted, this }
+        , _ov{{}, &Operation_Accept::on_accepted, this}
         , _listen_socket(listen_socket)
         , _iocp(&iocp)
         , _buffer{}
@@ -820,21 +821,286 @@ struct Sender_Write : Sender_LogSimple<std::size_t, std::error_code>
 // unifex::on(trampoline_scheduler(), ...) that fixes that.
 static Sender_Write async_write(Async_TCPSocket& tcp_socket, std::span<char> data) noexcept
 {
-    return Sender_Write{ tcp_socket, data };
+    return Sender_Write{tcp_socket, data};
 }
 
-template<typename Scheduler>
-static auto async_read(Async_TCPSocket& tcp_socket, std::span<char> data, Scheduler scheduler) noexcept
+template<typename Receiver>
+struct Operation_IOCP_Schedule : Operation_Log
+{
+    static constexpr wi::WinULONG_PTR kScheduleKeyIOCP = 2;
+
+    explicit Operation_IOCP_Schedule(Receiver&& receiver, wi::IoCompletionPort& iocp) noexcept
+        : Operation_Log("iocp_schedule")
+        , _receiver(std::move(receiver))
+        , _ov{{}, &Operation_IOCP_Schedule::on_scheduled, this}
+        , _iocp(&iocp) { }
+
+    Receiver _receiver;
+    IOCP_Overlapped _ov;
+    wi::IoCompletionPort* _iocp = nullptr;
+
+    static void on_scheduled(void* user_data, const wi::PortEntry& entry, std::error_code ec) noexcept
+    {
+        assert(user_data);
+        Operation_IOCP_Schedule& self = *static_cast<Operation_IOCP_Schedule*>(user_data);
+        self.log("on_scheduled");
+
+        assert(entry.bytes_transferred == 0);
+        assert(entry.completion_key == kScheduleKeyIOCP);
+        assert(entry.overlapped == self._ov.ptr());
+
+        if (ec)
+        {
+            unifex::set_error(std::move(self._receiver), ec);
+            return;
+        }
+
+        unifex::set_value(std::move(self._receiver));
+    }
+
+    friend void tag_invoke(unifex::tag_t<unifex::start>, Operation_IOCP_Schedule& self) noexcept
+    {
+        self.log("start");
+        wi::PortEntry entry{};
+        entry.bytes_transferred = 0;
+        entry.completion_key = kScheduleKeyIOCP;
+        entry.overlapped = self._ov.ptr();
+        std::error_code ec;
+        self._iocp->post(entry, ec);
+        if (ec)
+        {
+            self.on_scheduled(&self, entry, ec);
+        }
+    }
+};
+
+struct Sender_IOCP_Schedule : Sender_LogSimple<void, std::error_code>
+{
+    explicit Sender_IOCP_Schedule(wi::IoCompletionPort& iocp) noexcept
+        : Sender_LogSimple<void, std::error_code>("iocp_schedule")
+        , _iocp(&iocp) { }
+
+    wi::IoCompletionPort* _iocp;
+
+    template<typename This, typename Receiver>
+        requires std::is_same_v<Sender_IOCP_Schedule, std::remove_cvref_t<This>>
+    friend auto tag_invoke(unifex::tag_t<unifex::connect>
+        , This&& self, Receiver&& receiver) noexcept
+    {
+        self.log("connect");
+        using Reveiver_ = std::remove_cvref_t<Receiver>;
+        return Operation_IOCP_Schedule<Reveiver_>(std::move(receiver), *self._iocp);
+    }
+};
+
+static Sender_IOCP_Schedule IOCP_schedule(wi::IoCompletionPort& iocp)
+{
+    return Sender_IOCP_Schedule{iocp};
+}
+
+struct IOCP_Scheduler
+{
+    wi::IoCompletionPort* _iocp = nullptr;
+    Sender_IOCP_Schedule schedule() noexcept { return IOCP_schedule(*_iocp); }
+    bool operator==(const IOCP_Scheduler& rhs) const { return (_iocp == rhs._iocp); }
+    bool operator!=(const IOCP_Scheduler& rhs) const { return (_iocp != rhs._iocp); }
+};
+
+static_assert(unifex::scheduler<IOCP_Scheduler>);
+
+template<typename Receiver, typename Scheduler, typename Fallback>
+struct Operation_SelectOnceInN : Operation_Log
+{
+    explicit Operation_SelectOnceInN(Receiver&& receiver, unsigned* counter, unsigned N, Scheduler scheduler, Fallback fallback) noexcept
+        : Operation_Log("select_once_in_n")
+        , _receiver(std::move(receiver))
+        , _counter(counter)
+        , _N(N)
+        , _scheduler(std::move(scheduler))
+        , _fallback(fallback)
+        , _op{} { }
+
+    Receiver _receiver;
+    unsigned* _counter;
+    unsigned _N;
+    Scheduler _scheduler; // no_unique_address
+    Fallback _fallback; // no_unique_address
+
+    struct OnScheduledReceiver
+    {
+        Operation_SelectOnceInN* _self = nullptr;
+
+        // #XXX: should be generic of terms Scheduler & Fallback.
+        void set_value() noexcept
+        {
+            _self->destroy_op();
+            unifex::set_value(std::move(_self->_receiver));
+        }
+        void set_error(auto&& e1) noexcept
+        {
+            _self->destroy_op();
+            if constexpr (requires { unifex::set_value(std::move(_self->_receiver), e1); })
+            {
+                unifex::set_value(std::move(_self->_receiver), e1);
+            }
+            else if constexpr (requires { unifex::set_value(std::move(_self->_receiver)); })
+            {
+                unifex::set_value(std::move(_self->_receiver));
+            }
+            else
+            {
+                static_assert(sizeof(Receiver) == 0
+                    , "This temporary code is missing generic handling of Receiver.");
+            }
+        }
+        void set_done() noexcept
+        {
+            _self->destroy_op();
+            unifex::set_done(std::move(_self->_receiver));
+        }
+    };
+
+    using Op_Scheduler = decltype(unifex::connect(
+        std::declval<Scheduler&>().schedule()
+        , std::declval<OnScheduledReceiver>()));
+    using Op_Fallback = decltype(unifex::connect(
+        std::declval<Fallback&>().schedule()
+        , std::declval<OnScheduledReceiver>()));
+    using Storage_Scheduler = std::aligned_storage_t<sizeof(Op_Scheduler), alignof(Op_Scheduler)>;
+    using Storage_Fallback = std::aligned_storage_t<sizeof(Op_Fallback), alignof(Op_Fallback)>;
+
+    using Op_State = std::variant<
+        std::monostate
+        , Storage_Scheduler
+        , Storage_Fallback>;
+
+    Op_State _op;
+
+    void destroy_op()
+    {
+        if (void* scheduler = std::get_if<1>(&_op))
+        {
+            auto* op = static_cast<Op_Scheduler*>(scheduler);
+            op->~Op_Scheduler();
+        }
+        else if (void* fallback = std::get_if<2>(&_op))
+        {
+            auto* op = static_cast<Op_Fallback*>(fallback);
+            op->~Op_Fallback();
+        }
+        else
+        {
+            assert(false);
+        }
+    }
+
+    friend void tag_invoke(unifex::tag_t<unifex::start>, Operation_SelectOnceInN& self) noexcept
+    {
+        assert(self._counter);
+        assert(self._N > 0);
+        const unsigned counter = ++(*self._counter);
+        if ((counter % self._N) == 0)
+        {
+            // Select & run Scheduler.
+            void* storage = &self._op.template emplace<1>();
+            auto* op = new(storage) auto(unifex::connect(
+                self._scheduler.schedule()
+                , OnScheduledReceiver{&self}));
+            unifex::start(*op);
+        }
+        else
+        {
+            // Select & run Fallback Scheduler.
+            void* storage = &self._op.template emplace<2>();
+            auto* op = new(storage) auto(unifex::connect(
+                self._fallback.schedule()
+                , OnScheduledReceiver{&self}));
+            unifex::start(*op);
+        }
+    }
+};
+
+// #XXX: error should be variant<> from both schedulers.
+template<typename Scheduler, typename Fallback>
+struct Sender_SelectOnceInN : Sender_LogSimple<void, void>
+{
+    explicit Sender_SelectOnceInN(unsigned* counter, unsigned N, Scheduler scheduler, Fallback fallback) noexcept
+        : Sender_LogSimple<void, void>("select_once_in_n")
+        , _counter(counter)
+        , _N(N)
+        , _scheduler(std::move(scheduler))
+        , _fallback(fallback) { }
+
+    unsigned* _counter;
+    unsigned _N;
+    Scheduler _scheduler; // no_unique_address
+    Fallback _fallback; // no_unique_address
+
+    template<typename This, typename Receiver>
+        requires std::is_same_v<Sender_SelectOnceInN, std::remove_cvref_t<This>>
+    friend auto tag_invoke(unifex::tag_t<unifex::connect>
+        , This&& self, Receiver&& receiver) noexcept
+    {
+        self.log("connect");
+        using Reveiver_ = std::remove_cvref_t<Receiver>;
+        return Operation_SelectOnceInN<Reveiver_, Scheduler, Fallback>(std::move(receiver)
+            , self._counter, self._N, self._scheduler, self._fallback);
+    }
+};
+
+template<typename Scheduler, typename Fallback = unifex::inline_scheduler>
+struct SelectOnceInN_Scheduler
+{
+    unsigned* _counter;
+    unsigned _N;
+    Scheduler _scheduler; // no_unique_address
+    Fallback _fallback; // no_unique_address
+
+    explicit SelectOnceInN_Scheduler(Scheduler scheduler, unsigned& counter_now, unsigned n = 128, Fallback fallback = Fallback{}) noexcept
+        : _counter(&counter_now)
+        , _N(n)
+        , _scheduler(std::move(scheduler))
+        , _fallback(std::move(fallback)) {}
+
+    bool operator==(const SelectOnceInN_Scheduler& rhs) const
+    {
+        return (_counter == rhs._counter)
+            && (_N == rhs._N)
+            && (_scheduler == rhs._scheduler)
+            && (_fallback == rhs._fallback);
+    }
+    bool operator!=(const SelectOnceInN_Scheduler& rhs) const { return !(*this == rhs); }
+    
+    Sender_SelectOnceInN<Scheduler, Fallback> schedule() noexcept
+    {
+        return Sender_SelectOnceInN<Scheduler, Fallback>{_counter, _N, _scheduler, _fallback};
+    }
+};
+
+static_assert(unifex::scheduler<SelectOnceInN_Scheduler<unifex::inline_scheduler>>);
+static_assert(unifex::scheduler<SelectOnceInN_Scheduler<IOCP_Scheduler>>);
+
+static auto async_read(Async_TCPSocket& tcp_socket, std::span<char> data) noexcept
 {
     struct State
     {
         Async_TCPSocket& _socket;
-        std::span<char> _data;
-        std::size_t _read_bytes;
-        Scheduler _scheduler;
+        std::span<char> _data{};
+        std::size_t _read_bytes = 0;
+        unsigned _recursion_counter = 0;
+
+        auto scheduler()
+        {
+            // Schedule once in 128 calls into IOCP, otherwise inline_sheduler.
+            const unsigned unroll_depth = 128;
+            return SelectOnceInN_Scheduler<IOCP_Scheduler>(
+                IOCP_Scheduler{_socket._iocp}
+                , _recursion_counter
+                , unroll_depth);
+        }
     };
 
-    return unifex::let_value(unifex::just(State{tcp_socket, data, 0, std::move(scheduler)})
+    return unifex::let_value(unifex::just(State{tcp_socket, data, 0, 0})
         , [](State& state)
     {
         return unifex::repeat_effect_until(
@@ -842,29 +1108,32 @@ static auto async_read(Async_TCPSocket& tcp_socket, std::span<char> data, Schedu
             {
                 assert(state._read_bytes < state._data.size());
                 const std::size_t remaining = (state._data.size() - state._read_bytes);
-                // To avoid stackoverflow when async_read_some() completes immediately.
-                return unifex::on(state._scheduler,
+                return unifex::on(state.scheduler(),
                     state._socket.async_read_some(state._data.last(remaining))
                         | unifex::then([&state](std::size_t bytes_transferred)
-                        {
-                            state._read_bytes += bytes_transferred;
-                        }));
+                    {
+                        state._read_bytes += bytes_transferred;
+                    }));
             })
             , [&state]()
             {
                 return (state._read_bytes >= state._data.size());
             })
-                | unifex::then([&state]() { return state._read_bytes; });
+                | unifex::then([&state]()
+            {
+                // printf("Read %zu bytes with %u calls.\n", state._read_bytes, state._recursion_counter);
+                return state._read_bytes;
+            });
     });
 }
 
 struct StopReceiver
 {
-    bool& finish;
+    bool& _finish;
 
-    friend void tag_invoke(auto, StopReceiver&& r, auto&&...) noexcept
+    friend void tag_invoke(auto, StopReceiver&& self, auto&&...) noexcept
     {
-        r.finish = true;
+        self._finish = true;
     }
 };
 
@@ -896,19 +1165,12 @@ int main()
     assert(endpoint);
 
     std::vector<char> write_data;
-    write_data.resize(1ull * 1024, 'x');
+    write_data.resize(1ull * 1024 * 1024 * 1024 * 1, 'x');
     std::vector<char> read_data;
     read_data.resize(write_data.size());
 
     std::vector<char> server_data;
     server_data.resize(write_data.size());
-
-#if (1)
-    unifex::trampoline_scheduler scheduler(128/*max depth*/);
-#else
-    // Stackoverflow may be in async_read().
-    unifex::inline_scheduler scheduler;
-#endif
 
     // https://docs.microsoft.com/en-us/windows/win32/winsock/using-so-reuseaddr-and-so-exclusiveaddruse.
     int enable_reuse = 1;
@@ -945,7 +1207,7 @@ int main()
                     state._client = std::move(client);
                     printf("[Server] Accepted.\n");
                 })
-                , async_read(state._client, server_data, scheduler)
+                , async_read(state._client, server_data)
                     | unifex::then([&](std::size_t bytes_transferred)
                 {
                     printf("[Server] Received %zu bytes.\n", bytes_transferred);
@@ -974,7 +1236,7 @@ int main()
             {
                 printf("[Client] Sent %zu bytes.\n", bytes_transferred);
             })
-            , async_read(*client_socket, read_data, scheduler)
+            , async_read(*client_socket, read_data)
                 | unifex::then([&](std::size_t bytes_transferred)
             {
                 printf("[Client] Received %zu bytes.\n", bytes_transferred);
