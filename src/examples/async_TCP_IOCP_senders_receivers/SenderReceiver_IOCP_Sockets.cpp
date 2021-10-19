@@ -710,120 +710,6 @@ private:
     }
 };
 
-
-// Manually implemented composition of async_write_some().
-// See async_read() for implementation that uses generic algorithms to do the same thing.
-template<typename Receiver>
-struct Operation_Write : Operation_Log
-{
-    explicit Operation_Write(Receiver&& receiver, Async_TCPSocket& socket, std::span<char> data) noexcept
-        : Operation_Log("write")
-        , _receiver(std::move(receiver))
-        , _socket(socket)
-        , _data(data)
-        , _written_bytes(0)
-        , _write_some_op() { }
-
-    struct Receiver_WriteSomePart
-    {
-        Operation_Write& _self;
-
-        void set_value(std::size_t bytes_transferred) noexcept
-        {
-            _self.on_wrote_part(bytes_transferred);
-        }
-
-        void set_error(std::error_code ec) noexcept
-        {
-            _self.on_wrote_part_error(ec);
-        }
-
-        // libunifex does not compile without this. Bug?
-        void set_error(std::exception_ptr) noexcept
-        {
-            assert(false);
-            _self.on_wrote_part_error(std::error_code(-1));
-        }
-
-        void set_done() noexcept
-        {
-            assert(false);
-        }
-    };
-
-    Receiver _receiver;
-    Async_TCPSocket& _socket;
-    std::span<char> _data;
-    std::size_t _written_bytes;
-
-    using Op = Operation_WriteSome<Receiver_WriteSomePart>;
-    using OpStorage = std::aligned_storage_t<sizeof(Op), alignof(Op)>;
-    OpStorage _write_some_op;
-
-    void do_write_rest(std::size_t to_send) noexcept
-    {
-        Op* op = new(static_cast<void*>(&_write_some_op)) Op(unifex::connect(
-            _socket.async_write_some(_data.last(to_send))
-            , Receiver_WriteSomePart{*this}));
-        unifex::start(*op);
-    }
-
-    void on_wrote_part(std::size_t bytes_transferred) noexcept
-    {
-        _written_bytes += bytes_transferred;
-        assert(_written_bytes <= _data.size());
-        Op* op = static_cast<Op*>(static_cast<void*>(&_write_some_op));
-        op->~Op();
-
-        const std::size_t to_send = (_data.size() - _written_bytes);
-        if (to_send > 0)
-        {
-            do_write_rest(to_send);
-            return;
-        }
-        unifex::set_value(std::move(_receiver), _written_bytes);
-    }
-
-    void on_wrote_part_error(std::error_code ec) noexcept
-    {
-        unifex::set_error(std::move(_receiver), ec);
-    }
-
-    friend void tag_invoke(unifex::tag_t<unifex::start>, Operation_Write& self) noexcept
-    {
-        self.log("start");
-        self.do_write_rest(self._data.size());
-    }
-};
-
-struct Sender_Write : Sender_LogSimple<std::size_t, std::error_code>
-{
-    explicit Sender_Write(Async_TCPSocket& socket, std::span<char> buffer) noexcept
-        : Sender_LogSimple<size_t, std::error_code>("write")
-        , _socket(socket)
-        , _buffer(buffer) { }
-
-    Async_TCPSocket& _socket;
-    std::span<char> _buffer;
-
-    template<typename This, typename Receiver>
-        requires std::is_same_v<Sender_Write, std::remove_cvref_t<This>>
-    friend auto tag_invoke(unifex::tag_t<unifex::connect>
-        , This&& self, Receiver&& receiver) noexcept
-    {
-        self.log("connect");
-        using Reveiver_ = std::remove_cvref_t<Receiver>;
-        return Operation_Write<Reveiver_>(std::move(receiver), self._socket, self._buffer);
-    }
-};
-
-// #XXX: May crash with stack overflow. See async_read() with
-// unifex::on(trampoline_scheduler(), ...) that fixes that.
-static Sender_Write async_write(Async_TCPSocket& tcp_socket, std::span<char> data) noexcept
-{
-    return Sender_Write{tcp_socket, data};
-}
-
 template<typename Receiver>
 struct Operation_IOCP_Schedule : Operation_Log
 {
@@ -1121,8 +1007,59 @@ static auto async_read(Async_TCPSocket& tcp_socket, std::span<char> data) noexce
             })
                 | unifex::then([&state]()
             {
-                // printf("Read %zu bytes with %u calls.\n", state._read_bytes, state._recursion_counter);
+#if (0)
+                printf("Read %zu bytes with %u calls.\n", state._read_bytes, state._recursion_counter);
+#endif
                 return state._read_bytes;
+            });
+    });
+}
+
+// Same as async_read().
+static auto async_write(Async_TCPSocket& tcp_socket, std::span<char> data) noexcept
+{
+    struct State
+    {
+        Async_TCPSocket& _socket;
+        std::span<char> _data{};
+        std::size_t _written_bytes = 0;
+        unsigned _recursion_counter = 0;
+
+        auto scheduler()
+        {
+            const unsigned unroll_depth = 128;
+            return SelectOnceInN_Scheduler<IOCP_Scheduler>(
+                IOCP_Scheduler{_socket._iocp}
+                , _recursion_counter
+                , unroll_depth);
+        }
+    };
+
+    return unifex::let_value(unifex::just(State{tcp_socket, data, 0, 0})
+        , [](State& state)
+    {
+        return unifex::repeat_effect_until(
+            unifex::defer([&state]()
+            {
+                assert(state._written_bytes < state._data.size());
+                const std::size_t remaining = (state._data.size() - state._written_bytes);
+                return unifex::on(state.scheduler(),
+                    state._socket.async_write_some(state._data.last(remaining))
+                        | unifex::then([&state](std::size_t bytes_transferred)
+                    {
+                        state._written_bytes += bytes_transferred;
+                    }));
+            })
+            , [&state]()
+            {
+                return (state._written_bytes >= state._data.size());
+            })
+                | unifex::then([&state]()
+            {
+#if (0)
+                printf("Wrote %zu bytes with %u calls.\n", state._written_bytes, state._recursion_counter);
+#endif
+                return state._written_bytes;
             });
     });
 }
