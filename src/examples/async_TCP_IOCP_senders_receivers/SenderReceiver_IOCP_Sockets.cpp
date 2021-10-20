@@ -178,8 +178,14 @@ struct Operation_Connect : Operation_Log
             return;
         }
 
-        const int error = ::setsockopt(self._socket, SOL_SOCKET, SO_UPDATE_CONNECT_CONTEXT, nullptr, 0);
-        assert(error == 0);
+        const int ok = ::setsockopt(self._socket, SOL_SOCKET, SO_UPDATE_CONNECT_CONTEXT, nullptr, 0);
+        if (ok != 0)
+        {
+            const int wsa_error = ::WSAGetLastError();
+            unifex::set_error(std::move(self._receiver)
+                , std::error_code(wsa_error, std::system_category()));
+            return;
+        }
 
         unifex::set_value(std::move(self._receiver));
     }
@@ -1057,6 +1063,299 @@ static auto async_write(Async_TCPSocket& tcp_socket, std::span<char> data) noexc
     });
 }
 
+struct EndpointsList_IPv4
+{
+    PADDRINFOEXW _address_list = nullptr;
+    explicit EndpointsList_IPv4(PADDRINFOEXW address_list) noexcept
+        : _address_list(address_list)
+    {
+    }
+    ~EndpointsList_IPv4()
+    {
+        destroy();
+    }
+    EndpointsList_IPv4(const EndpointsList_IPv4&) = default;
+    EndpointsList_IPv4& operator=(const EndpointsList_IPv4&) = default;
+    EndpointsList_IPv4(EndpointsList_IPv4&& rhs) noexcept
+        : _address_list(std::exchange(rhs._address_list, nullptr))
+    {
+    }
+    EndpointsList_IPv4& operator=(EndpointsList_IPv4&& rhs) noexcept
+    {
+        if (this != &rhs)
+        {
+            destroy();
+            _address_list = std::exchange(rhs._address_list, nullptr);
+        }
+        return *this;
+    }
+
+    struct iterator
+    {
+        PADDRINFOEXW _address_list = nullptr;
+
+        template<class Reference>
+        struct arrow_proxy
+        {
+            Reference _ref;
+            Reference* operator->()
+            {
+                return &_ref;
+            }
+        };
+
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = const Endpoint_IPv4;
+        using reference = const Endpoint_IPv4;
+        using pointer = arrow_proxy<const Endpoint_IPv4>;
+        using difference_type = std::ptrdiff_t;
+
+        reference operator*() const { return get(); }
+        pointer operator->() const { return pointer{get()}; }
+
+        bool operator==(const iterator& rhs) const { return (_address_list == rhs._address_list); }
+        bool operator!=(const iterator& rhs) const { return (_address_list != rhs._address_list); }
+
+        Endpoint_IPv4 get() const
+        {
+            assert(_address_list);
+            assert(_address_list->ai_addrlen == sizeof(sockaddr_in));
+            const struct sockaddr_in* ipv4 =
+                reinterpret_cast<const struct sockaddr_in*>(_address_list->ai_addr);
+            Endpoint_IPv4 endpoint;
+            endpoint._ip_network = ipv4->sin_addr.s_addr;
+            endpoint._port_network = ipv4->sin_port;
+            return endpoint;
+        }
+
+        iterator operator++()
+        {
+            assert(_address_list);
+            _address_list = _address_list->ai_next;
+            return iterator{_address_list};
+        }
+        iterator operator++(int)
+        {
+            assert(_address_list);
+            PADDRINFOEXW current = _address_list;
+            _address_list = _address_list->ai_next;
+            return iterator{current};
+        }
+    };
+
+    iterator begin() { return iterator{_address_list}; }
+    iterator begin() const { return iterator{_address_list}; }
+    iterator end() { return iterator{}; }
+    iterator end() const { return iterator{}; }
+
+private:
+    void destroy()
+    {
+        PADDRINFOEXW ptr = std::exchange(_address_list, nullptr);
+        if (ptr)
+        {
+            ::FreeAddrInfoExW(ptr);
+        }
+    }
+};
+
+template<typename Receiver>
+struct Operation_Resolve : Operation_Log
+{
+    struct AddrInfo_Overlapped : WSAOVERLAPPED
+    {
+        using Callback = void (Operation_Resolve::*)(DWORD /*error*/, DWORD /*bytes*/);
+        Callback _callback = nullptr;
+        Operation_Resolve* _self = nullptr;
+    };
+
+    explicit Operation_Resolve(Receiver&& receiver, wi::IoCompletionPort& iocp, std::string_view host_name, std::string_view service_name_or_port) noexcept
+        : Operation_Log("resolve")
+        , _receiver(std::move(receiver))
+        , _iocp(&iocp)
+        , _host_name(host_name)
+        , _service_name_or_port(service_name_or_port)
+        , _whost_name()
+        , _wservice_name()
+        , _results(nullptr)
+        , _cancel_handle(nullptr)
+        , _ov{{}, &Operation_Resolve::on_complete_WindowsThread, this}
+        , _iocp_ov{{}, &Operation_Resolve::on_addrinfo_finish, this}
+        { }
+
+    Receiver _receiver;
+    wi::IoCompletionPort* _iocp;
+    std::string_view _host_name;
+    std::string_view _service_name_or_port;
+
+    wchar_t _whost_name[256];
+    wchar_t _wservice_name[256];
+    PADDRINFOEXW _results;
+    HANDLE _cancel_handle;
+    AddrInfo_Overlapped _ov;
+    IOCP_Overlapped _iocp_ov;
+
+    static void on_addrinfo_finish(void* user_data, const wi::PortEntry& entry, std::error_code ec)
+    {
+        Operation_Resolve* self = static_cast<Operation_Resolve*>(user_data);
+        self->_cancel_handle = nullptr; // Invalid now.
+
+        if (ec)
+        {
+            unifex::set_error(std::move(self->_receiver), ec);
+            return;
+        }
+        // error, see on_complete_WindowsThread().
+        const DWORD error = DWORD(entry.completion_key);
+        if (error != 0)
+        {
+            unifex::set_error(std::move(self->_receiver)
+                , std::error_code(int(error), std::system_category()));
+            return;
+        }
+        unifex::set_value(std::move(self->_receiver)
+            , EndpointsList_IPv4(self->_results));
+    }
+
+    void on_complete_WindowsThread(DWORD error, DWORD bytes)
+    {
+        wi::PortEntry entry{};
+        entry.overlapped = _iocp_ov.ptr();
+        entry.completion_key = error;
+        entry.bytes_transferred = bytes;
+        std::error_code ec;
+        _iocp->post(entry, ec);
+        if (ec) // Bad. Invoking user code on external ws2_32.dll, TppWorkerThread.
+        {
+            on_addrinfo_finish(this, entry, ec);
+        }
+    }
+
+    static void CALLBACK OnAddrInfoEx_CompleteCallback(DWORD dwError, DWORD dwBytes, LPWSAOVERLAPPED lpOverlapped)
+    {
+        AddrInfo_Overlapped* ov = static_cast<AddrInfo_Overlapped*>(lpOverlapped);
+        Operation_Resolve& self = *ov->_self;
+        auto callback = ov->_callback;
+        (self.*callback)(dwError, dwBytes);
+    }
+
+    friend void tag_invoke(unifex::tag_t<unifex::start>, Operation_Resolve& self) noexcept
+    {
+        // See also "Internationalized Domain Names":
+        // https://docs.microsoft.com/en-us/windows/win32/api/ws2tcpip/nf-ws2tcpip-getaddrinfoexw#internationalized-domain-names.
+        if (self._host_name.size() > 0)
+        {
+            const int error = ::MultiByteToWideChar(CP_ACP
+                , MB_PRECOMPOSED
+                , self._host_name.data()
+                , int(self._host_name.size())
+                , self._whost_name
+                , int(std::size(self._whost_name)));
+            if (error == 0)
+            {
+                assert(false);
+                return;
+            }
+        }
+        if (self._service_name_or_port.size() > 0)
+        {
+            const int error = ::MultiByteToWideChar(CP_ACP
+                , MB_PRECOMPOSED
+                , self._service_name_or_port.data()
+                , int(self._service_name_or_port.size())
+                , self._wservice_name
+                , int(std::size(self._wservice_name)));
+            if (error == 0)
+            {
+                assert(false);
+                return;
+            }
+        }
+
+        ADDRINFOEXW hints{};
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_protocol = IPPROTO_TCP;
+        const INT error = ::GetAddrInfoExW(self._whost_name, self._wservice_name
+            , NS_ALL
+            , nullptr // lpNspId
+            , &hints
+            , &self._results
+            , nullptr // timeout
+            , &self._ov
+            , &OnAddrInfoEx_CompleteCallback
+            , &self._cancel_handle);
+        if (error == 0)
+        {
+            wi::PortEntry entry{};
+            entry.overlapped = self._iocp_ov.ptr();
+            entry.completion_key = 0;
+            entry.bytes_transferred = 0;
+            on_addrinfo_finish(&self, entry, std::error_code());
+        }
+        else if (error != WSA_IO_PENDING)
+        {
+            wi::PortEntry entry{};
+            entry.overlapped = self._iocp_ov.ptr();
+            entry.completion_key = error;
+            entry.bytes_transferred = 0;
+            on_addrinfo_finish(&self, entry, std::error_code());
+        }
+    }
+};
+
+struct Sender_Resolve : Sender_LogSimple<EndpointsList_IPv4, std::error_code>
+{
+    explicit Sender_Resolve(wi::IoCompletionPort& iocp, std::string_view host_name, std::string_view service_name_or_port) noexcept
+        : Sender_LogSimple<EndpointsList_IPv4, std::error_code>("resolve")
+        , _iocp(&iocp)
+        , _host_name(host_name)
+        , _service_name_or_port(service_name_or_port) { }
+
+    wi::IoCompletionPort* _iocp;
+    std::string_view _host_name;
+    std::string_view _service_name_or_port;
+
+    template<typename Receiver>
+    friend auto tag_invoke(unifex::tag_t<unifex::connect>
+        , Sender_Resolve&& self, Receiver&& receiver) noexcept
+    {
+        self.log("connect");
+        using Reveiver_ = std::remove_cvref_t<Receiver>;
+        return Operation_Resolve<Reveiver_>(std::move(receiver), *self._iocp, self._host_name, self._service_name_or_port);
+    }
+};
+
+// IPv4.
+static Sender_Resolve async_resolve(wi::IoCompletionPort& iocp
+    , std::string_view host_name
+    // Either service name, like "http", see "%WINDIR%\system32\drivers\etc\services" on Windows
+    // OR port, like "80".
+    , std::string_view service_name_or_port = {})
+{
+    return Sender_Resolve(iocp, host_name, service_name_or_port);
+}
+
+static auto async_connect(Async_TCPSocket& socket, EndpointsList_IPv4 endpoints)
+{
+    // #XXX: should be similar to this pseudo-code.
+#if (0)
+    if (endpoints.empty())
+        return _error_NoEndpoints;
+    error_code error;
+    for (Endpoint_IPv4 endpoint : endpoints)
+    {
+        if (socket.async_connect(endpoint))
+            return endpoint;
+        else
+            error = connect_error;
+    }
+    return error;
+#endif
+    assert(std::begin(endpoints) != std::end(endpoints));
+    return socket.async_connect(*std::begin(endpoints));
+}
+
 struct StopReceiver
 {
     bool& _finish;
@@ -1072,12 +1371,8 @@ struct StopReceiver
 
 #include <cstring>
 
-int main()
+static void main_client_server()
 {
-    WSADATA wsa_data{};
-    int error = ::WSAStartup(MAKEWORD(2, 2), &wsa_data);
-    assert(error == 0);
-
     std::error_code ec;
     auto iocp = wi::IoCompletionPort::make(ec);
     assert(!ec);
@@ -1104,7 +1399,7 @@ int main()
 
     // https://docs.microsoft.com/en-us/windows/win32/winsock/using-so-reuseaddr-and-so-exclusiveaddruse.
     int enable_reuse = 1;
-    error = ::setsockopt(server_socket->_socket, SOL_SOCKET, SO_REUSEADDR
+    int error = ::setsockopt(server_socket->_socket, SOL_SOCKET, SO_REUSEADDR
         , reinterpret_cast<char*>(&enable_reuse), sizeof(enable_reuse));
     assert(error == 0);
 
@@ -1174,8 +1469,6 @@ int main()
             );
     };
 
-    const auto start = std::chrono::steady_clock::now();
-
     bool finish_server = false;
     auto server_state = unifex::connect(server_logic(), StopReceiver{finish_server});
     unifex::start(server_state);
@@ -1196,15 +1489,65 @@ int main()
         }
     }
 
+    assert(memcmp(write_data.data(), read_data.data(), write_data.size()) == 0);
+    assert(memcmp(write_data.data(), server_data.data(), write_data.size()) == 0);
+}
+
+static void main_resolve()
+{
+    std::error_code ec;
+    auto iocp = wi::IoCompletionPort::make(ec);
+    assert(!ec);
+    assert(iocp);
+
+    auto client = Async_TCPSocket::make(*iocp, ec);
+    assert(!ec);
+
+    auto test_logic = [&]()
+    {
+        return unifex::let_value(async_resolve(*iocp, "www.google.com", "80")
+            , [&](EndpointsList_IPv4& endpoints)
+        {
+            return async_connect(*client, std::move(endpoints));
+        })
+            | unifex::then([]()
+        {
+            printf("Connected!\n");
+        });
+    };
+
+    bool finish = false;
+    auto state = unifex::connect(test_logic(), StopReceiver{finish});
+    unifex::start(state);
+    while (!finish)
+    {
+        wi::PortEntry entries[4];
+        for (const wi::PortEntry& entry : iocp->get_many(entries, ec))
+        {
+            IOCP_Overlapped* ov = static_cast<IOCP_Overlapped*>(entry.overlapped);
+            assert(ov);
+            assert(ov->_callback);
+            ov->_callback(ov->_user_data, entry, ec);
+        }
+    }
+}
+
+int main(int argc, char**)
+{
+    WSADATA wsa_data{};
+    int error = ::WSAStartup(MAKEWORD(2, 2), &wsa_data);
+    assert(error == 0);
+
+    const auto start = std::chrono::steady_clock::now();
+
+    if (argc >= 2)
+        main_client_server();
+    else if (argc >= 1)
+        main_resolve();
+
     const auto end = std::chrono::steady_clock::now();
     const float seconds = std::chrono::duration_cast<std::chrono::duration<float>>(end - start).count();
     printf("Elapsed: %.3f seconds.\n", seconds);
-
-    assert(memcmp(write_data.data(), read_data.data(), write_data.size()) == 0);
-    assert(memcmp(write_data.data(), server_data.data(), write_data.size()) == 0);
-
-    client_socket->disconnect();
-    server_socket->disconnect();
 
     ::WSACleanup();
 }
