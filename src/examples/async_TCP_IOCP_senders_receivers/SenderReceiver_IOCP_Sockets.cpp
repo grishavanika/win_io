@@ -52,6 +52,14 @@
 // to ensure this is true for learning purpose.
 #define XX_ENABLE_LOGS() 0
 
+template<typename Sender>
+using XX_Values = unifex::sender_value_types_t<Sender, std::variant, std::tuple>;
+template<typename Sender>
+using XX_Errors = unifex::sender_error_types_t<Sender, std::variant>;
+
+template<typename Unknown>
+struct XX_Show;
+
 struct MoveOnly_Named
 {
     MoveOnly_Named(const MoveOnly_Named&) = delete;
@@ -162,7 +170,7 @@ struct Endpoint_IPv4
     // `src` is in dotted-decimal format, "ddd.ddd.ddd.ddd".
     static std::optional<Endpoint_IPv4> from_string(const char* src, std::uint16_t port_host)
     {
-        struct in_addr ipv4 {};
+        struct in_addr ipv4{};
         static_assert(sizeof(ipv4.s_addr) == sizeof(std::uint32_t));
         const int ok = inet_pton(AF_INET, src, &ipv4);
         if (ok == 1)
@@ -243,10 +251,13 @@ struct Operation_Connect : Operation_Log
             local_address.sin_family = AF_INET;
             local_address.sin_addr.s_addr = INADDR_ANY;
             local_address.sin_port = 0;
-            const int error = ::bind(self._socket
+            int ok = ::bind(self._socket
                 , reinterpret_cast<SOCKADDR*>(&local_address)
                 , sizeof(local_address));
-            assert(error == 0);
+            const int wsa_error = ::WSAGetLastError();
+            assert((ok == 0)
+                // WSAEINVAL - when binding a socked 2nd or more time :(
+                || (wsa_error == WSAEINVAL));
         }
 
         struct sockaddr_in connect_to {};
@@ -1001,16 +1012,15 @@ static auto async_read(Async_TCPSocket& tcp_socket, std::span<char> data) noexce
         Async_TCPSocket& _socket;
         std::span<char> _data{};
         std::size_t _read_bytes = 0;
-        unsigned _recursion_counter = 0;
+        unsigned _calls_count = 0;
 
         auto scheduler()
         {
             // Schedule once in 128 calls into IOCP, otherwise inline_sheduler.
-            const unsigned unroll_depth = 128;
             return SelectOnceInN_Scheduler<IOCP_Scheduler>(
                 IOCP_Scheduler{_socket._iocp}
-                , _recursion_counter
-                , unroll_depth);
+                , _calls_count
+                , 128);
         }
     };
 
@@ -1365,24 +1375,123 @@ static Sender_Resolve async_resolve(wi::IoCompletionPort& iocp
     return Sender_Resolve(iocp, host_name, service_name_or_port);
 }
 
-static auto async_connect(Async_TCPSocket& socket, EndpointsList_IPv4 endpoints)
+template<typename Receiver, typename EndpointsRange>
+struct Operation_RangeConnect : Operation_Log
 {
-    // #XXX: should be similar to this pseudo-code.
-#if (0)
-    if (endpoints.empty())
-        return _error_NoEndpoints;
-    error_code error;
-    for (Endpoint_IPv4 endpoint : endpoints)
+    explicit Operation_RangeConnect(Receiver&& receiver, Async_TCPSocket& socket, EndpointsRange&& endpoints) noexcept
+        : Operation_Log("range_connect")
+        , _receiver(std::move(receiver))
+        , _socket(&socket)
+        , _endpoints(std::move(endpoints)) {}
+
+    Receiver _receiver;
+    Async_TCPSocket* _socket;
+    EndpointsRange _endpoints;
+
+    struct Receiver_Connect
     {
-        if (socket.async_connect(endpoint))
-            return endpoint;
-        else
-            error = connect_error;
+        Operation_RangeConnect* _self;
+
+        void set_value() && noexcept
+        {
+            _self->on_connect_success();
+        }
+        void set_error(std::error_code ec) && noexcept
+        {
+            _self->on_connect_error(ec);
+        }
+        void set_error(std::exception_ptr) && noexcept
+        {
+            _self->on_connect_error(std::error_code(-1, std::system_category()));
+        }
+        void set_done() && noexcept
+        {
+            assert(false);
+        }
+    };
+
+    using Op = Operation_Connect<Receiver_Connect>;
+    using Iterator = typename EndpointsRange::iterator;
+    using ConnectStorage = std::aligned_storage_t<sizeof(Op), alignof(Op)>;
+
+    Iterator _current_endpoint;
+    std::error_code _last_error;
+    ConnectStorage _op;
+
+    void on_connect_success() noexcept
+    {
+        destroy_storage();
+        unifex::set_value(std::move(_receiver), *_current_endpoint);
     }
-    return error;
-#endif
-    assert(std::begin(endpoints) != std::end(endpoints));
-    return socket.async_connect(*std::begin(endpoints));
+
+    void on_connect_error(std::error_code ec) noexcept
+    {
+        destroy_storage();
+        _last_error = ec;
+        ++_current_endpoint;
+        start_next_connect();
+    }
+
+    void destroy_storage() noexcept
+    {
+        void* storage = &_op;
+        Op* op = static_cast<Op*>(storage);
+        op->~Op();
+    }
+
+    void start_next_connect()
+    {
+        if (_current_endpoint == std::end(_endpoints))
+        {
+            unifex::set_error(std::move(_receiver), _last_error);
+            return;
+        }
+
+        void* storage = &_op;
+        Op* op = new(storage) auto(unifex::connect(
+            _socket->async_connect(*_current_endpoint)
+            , Receiver_Connect{this}));
+        unifex::start(*op);
+    }
+
+    friend void tag_invoke(unifex::tag_t<unifex::start>, Operation_RangeConnect& self) noexcept
+    {
+        self.log("start");
+
+        self._last_error = std::error_code(-1, std::system_category()); // Empty.
+        self._current_endpoint = std::begin(self._endpoints);
+        self.start_next_connect();
+    }
+};
+
+template<typename EndpointsRange>
+struct Sender_RangeConnect : Sender_LogSimple<Endpoint_IPv4, std::error_code>
+{
+    explicit Sender_RangeConnect(Async_TCPSocket& socket, EndpointsRange endpoints) noexcept
+        : Sender_LogSimple<Endpoint_IPv4, std::error_code>("range_connect")
+        , _socket(&socket)
+        , _endpoints(std::move(endpoints)) { }
+
+    Async_TCPSocket* _socket;
+    EndpointsRange _endpoints;
+
+    template<typename Receiver>
+    friend auto tag_invoke(unifex::tag_t<unifex::connect>
+        , Sender_RangeConnect&& self, Receiver&& receiver) noexcept
+    {
+        self.log("connect");
+        using Reveiver_ = std::remove_cvref_t<Receiver>;
+        return Operation_RangeConnect<Reveiver_, EndpointsRange>(std::move(receiver)
+            , *self._socket, std::move(self._endpoints));
+    }
+};
+
+template<typename EndpointsRange>
+static auto async_connect(Async_TCPSocket& socket, EndpointsRange&& endpoints)
+{
+    // #XXX: implement when_first() algorithm.
+    using EndpointsRange_ = std::remove_cvref_t<EndpointsRange>;
+    return Sender_RangeConnect<EndpointsRange_>(socket, std::forward<EndpointsRange>(endpoints));
 }
 
 struct StopReceiver
@@ -1541,7 +1650,7 @@ static void main_resolve()
         {
             return async_connect(*client, std::move(endpoints));
         })
-            | unifex::then([]()
+            | unifex::then([](Endpoint_IPv4)
         {
             printf("Connected!\n");
         });
