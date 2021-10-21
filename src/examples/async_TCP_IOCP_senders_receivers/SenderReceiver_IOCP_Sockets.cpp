@@ -24,10 +24,9 @@
 #include <unifex/let_value.hpp>
 #include <unifex/let_value_with.hpp>
 #include <unifex/just_done.hpp>
-#include <unifex/just_error.hpp>
-#include <unifex/trampoline_scheduler.hpp>
 #include <unifex/inline_scheduler.hpp>
 #include <unifex/on.hpp>
+#include <unifex/when_all.hpp>
 
 #include <system_error>
 #include <optional>
@@ -36,6 +35,7 @@
 #include <span>
 #include <limits>
 #include <variant>
+#include <string_view>
 
 #include <cstddef>
 #include <cstdint>
@@ -107,6 +107,35 @@ struct Sender_LogSimple<void, E> : MoveOnly_Named
                         //      ^^^^^^^ void
     template <template <typename...> class Variant>
     using error_types = Variant<E>;
+    static constexpr bool sends_done = true;
+
+protected:
+    using MoveOnly_Named::MoveOnly_Named;
+};
+
+template<typename V>
+struct Sender_LogSimple<V, void> : MoveOnly_Named
+{
+    template<template <typename...> class Variant, template <typename...> class Tuple>
+    using value_types = Variant<Tuple<V>>;
+    template <template <typename...> class Variant>
+    using error_types = Variant<>;
+                        // ^^^^^^^ void
+    static constexpr bool sends_done = true;
+
+protected:
+    using MoveOnly_Named::MoveOnly_Named;
+};
+
+template<>
+struct Sender_LogSimple<void, void> : MoveOnly_Named
+{
+    template<template <typename...> class Variant, template <typename...> class Tuple>
+    using value_types = Variant<Tuple<>>;
+                        //      ^^^^^^^ void
+    template <template <typename...> class Variant>
+    using error_types = Variant<>;
+                        // ^^^^^^^ void
     static constexpr bool sends_done = true;
 
 protected:
@@ -1366,6 +1395,26 @@ struct StopReceiver
     }
 };
 
+template<typename Sender>
+static void IOCP_sync_wait(wi::IoCompletionPort& iocp, Sender&& sender)
+{
+    bool finish = false;
+    auto op_state = unifex::connect(std::forward<Sender>(sender), StopReceiver{finish});
+    unifex::start(op_state);
+    std::error_code ec;
+    while (!finish)
+    {
+        wi::PortEntry entries[4];
+        for (const wi::PortEntry& entry : iocp.get_many(entries, ec))
+        {
+            IOCP_Overlapped* ov = static_cast<IOCP_Overlapped*>(entry.overlapped);
+            assert(ov);
+            assert(ov->_callback);
+            ov->_callback(ov->_user_data, entry, ec);
+        }
+    }
+}
+
 #include <vector>
 #include <chrono>
 
@@ -1469,25 +1518,7 @@ static void main_client_server()
             );
     };
 
-    bool finish_server = false;
-    auto server_state = unifex::connect(server_logic(), StopReceiver{finish_server});
-    unifex::start(server_state);
-
-    bool finish_client = false;
-    auto client_state = unifex::connect(client_logic(), StopReceiver{finish_client});
-    unifex::start(client_state);
-
-    while (!finish_client || !finish_server)
-    {
-        wi::PortEntry entries[4];
-        for (const wi::PortEntry& entry : iocp->get_many(entries, ec))
-        {
-            IOCP_Overlapped* ov = static_cast<IOCP_Overlapped*>(entry.overlapped);
-            assert(ov);
-            assert(ov->_callback);
-            ov->_callback(ov->_user_data, entry, ec);
-        }
-    }
+    IOCP_sync_wait(*iocp, unifex::when_all(server_logic(), client_logic()));
 
     assert(memcmp(write_data.data(), read_data.data(), write_data.size()) == 0);
     assert(memcmp(write_data.data(), server_data.data(), write_data.size()) == 0);
@@ -1516,20 +1547,7 @@ static void main_resolve()
         });
     };
 
-    bool finish = false;
-    auto state = unifex::connect(test_logic(), StopReceiver{finish});
-    unifex::start(state);
-    while (!finish)
-    {
-        wi::PortEntry entries[4];
-        for (const wi::PortEntry& entry : iocp->get_many(entries, ec))
-        {
-            IOCP_Overlapped* ov = static_cast<IOCP_Overlapped*>(entry.overlapped);
-            assert(ov);
-            assert(ov->_callback);
-            ov->_callback(ov->_user_data, entry, ec);
-        }
-    }
+    IOCP_sync_wait(*iocp, test_logic());
 }
 
 int main(int argc, char**)
@@ -1540,9 +1558,9 @@ int main(int argc, char**)
 
     const auto start = std::chrono::steady_clock::now();
 
-    if (argc >= 2)
+    if (argc >= 1)
         main_client_server();
-    else if (argc >= 1)
+    else if (argc >= 2)
         main_resolve();
 
     const auto end = std::chrono::steady_clock::now();
