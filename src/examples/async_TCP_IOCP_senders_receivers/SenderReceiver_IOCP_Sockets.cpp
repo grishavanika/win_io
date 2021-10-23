@@ -27,6 +27,9 @@
 #include <unifex/inline_scheduler.hpp>
 #include <unifex/on.hpp>
 #include <unifex/when_all.hpp>
+#include <unifex/inplace_stop_token.hpp>
+#include <unifex/with_query_value.hpp>
+#include <unifex/manual_lifetime.hpp>
 
 #include <system_error>
 #include <optional>
@@ -1198,7 +1201,8 @@ private:
     }
 };
 
-template<typename Receiver>
+template<typename Receiver
+    , typename StopToken = unifex::stop_token_type_t<Receiver>>
 struct Operation_Resolve : Operation_Log
 {
     struct AddrInfo_Overlapped : WSAOVERLAPPED
@@ -1217,10 +1221,12 @@ struct Operation_Resolve : Operation_Log
         , _whost_name()
         , _wservice_name()
         , _results(nullptr)
-        , _cancel_handle(nullptr)
         , _ov{{}, &Operation_Resolve::on_complete_WindowsThread, this}
         , _iocp_ov{{}, &Operation_Resolve::on_addrinfo_finish, this}
-        { }
+        , _stop_callback()
+        , _cancel_handle(nullptr)
+        , _atomic_stop()
+    { }
 
     Receiver _receiver;
     wi::IoCompletionPort* _iocp;
@@ -1230,14 +1236,44 @@ struct Operation_Resolve : Operation_Log
     wchar_t _whost_name[256];
     wchar_t _wservice_name[256];
     PADDRINFOEXW _results;
-    HANDLE _cancel_handle;
     AddrInfo_Overlapped _ov;
     IOCP_Overlapped _iocp_ov;
+
+    struct Stop_Callback
+    {
+        Operation_Resolve* _self = nullptr;
+
+        void operator()() noexcept
+        {
+            _self->try_stop();
+        }
+    };
+
+    using StopCallback = typename StopToken::template callback_type<Stop_Callback>;
+    unifex::manual_lifetime<StopCallback> _stop_callback;
+    HANDLE _cancel_handle;
+    // Points to `_cancel_handle` when cancel is available.
+    std::atomic<HANDLE*> _atomic_stop;
 
     static void on_addrinfo_finish(void* user_data, const wi::PortEntry& entry, std::error_code ec)
     {
         Operation_Resolve* self = static_cast<Operation_Resolve*>(user_data);
-        self->_cancel_handle = nullptr; // Invalid now.
+
+        if constexpr (!unifex::is_stop_never_possible_v<StopToken>)
+        {
+            // #WWW: There is race if someone asks to stop now.
+            self->_cancel_handle = nullptr; // Invalid now.
+            self->_atomic_stop = nullptr;
+            self->_stop_callback.destruct();
+
+            auto stop_token = unifex::get_stop_token(self->_receiver);
+            if (stop_token.stop_requested())
+            {
+                // set_done() even if we happened to succeed.
+                unifex::set_done(std::move(self->_receiver));
+                return;
+            }
+        }
 
         if (ec)
         {
@@ -1258,6 +1294,7 @@ struct Operation_Resolve : Operation_Log
 
     void on_complete_WindowsThread(DWORD error, DWORD bytes)
     {
+        // #XXX: need to invalidate _cancel_handle/_atomic_stop there.
         wi::PortEntry entry{};
         entry.overlapped = _iocp_ov.ptr();
         entry.completion_key = error;
@@ -1276,6 +1313,19 @@ struct Operation_Resolve : Operation_Log
         Operation_Resolve& self = *ov->_self;
         auto callback = ov->_callback;
         (self.*callback)(dwError, dwBytes);
+    }
+
+    void try_stop() noexcept
+    {
+        HANDLE* cancel_handle = _atomic_stop.exchange(nullptr);
+        if (!cancel_handle)
+        {
+            // Operation is not yet started or is in finish callback.
+            return;
+        }
+
+        const INT error = ::GetAddrInfoExCancel(cancel_handle);
+        (void)error; // Not much can be done.
     }
 
     friend void tag_invoke(unifex::tag_t<unifex::start>, Operation_Resolve& self) noexcept
@@ -1311,6 +1361,15 @@ struct Operation_Resolve : Operation_Log
             }
         }
 
+        // Don't even alloc (?) cancel handle if not stoppable.
+        auto stop_token = unifex::get_stop_token(self._receiver);
+        HANDLE* cancel_handle = (stop_token.stop_possible() ? &self._cancel_handle : nullptr);
+
+        if constexpr (!unifex::is_stop_never_possible_v<StopToken>)
+        {
+            self._stop_callback.construct(stop_token, Stop_Callback{&self});
+        }
+
         ADDRINFOEXW hints{};
         hints.ai_family = AF_INET;
         hints.ai_socktype = SOCK_STREAM;
@@ -1323,23 +1382,41 @@ struct Operation_Resolve : Operation_Log
             , nullptr // timeout
             , &self._ov
             , &OnAddrInfoEx_CompleteCallback
-            , &self._cancel_handle);
+            , cancel_handle);
         if (error == 0)
         {
             wi::PortEntry entry{};
             entry.overlapped = self._iocp_ov.ptr();
             entry.completion_key = 0;
             entry.bytes_transferred = 0;
+            // Handles concurrent stop request if any.
             on_addrinfo_finish(&self, entry, std::error_code());
+            return;
         }
-        else if (error != WSA_IO_PENDING)
+        if (error != WSA_IO_PENDING)
         {
             wi::PortEntry entry{};
             entry.overlapped = self._iocp_ov.ptr();
             entry.completion_key = error;
             entry.bytes_transferred = 0;
+            // Handles concurrent stop request if any.
             on_addrinfo_finish(&self, entry, std::error_code());
+            return;
         }
+
+        if constexpr (!unifex::is_stop_never_possible_v<StopToken>)
+        {
+            // #WWW: there is race between doing a call to ::GetAddrInfoExW()
+            // - creating `_cancel_handle` - and stop request from
+            // stop source. In this case we have to way to actually interrupt
+            // ::GetAddrInfoExW() and will simply fail to stop.
+            if (cancel_handle)
+            {
+                self._atomic_stop = cancel_handle;
+            }
+        }
+
+        // In progress.
     }
 };
 
@@ -1524,6 +1601,15 @@ static void IOCP_sync_wait(wi::IoCompletionPort& iocp, Sender&& sender)
     }
 }
 
+template<typename StopSource, typename Sender>
+static auto stop_with(StopSource& stop_source, Sender&& sender)
+{
+    return unifex::with_query_value(
+        std::forward<Sender>(sender)
+        , unifex::get_stop_token
+        , stop_source.get_token());
+}
+
 #include <vector>
 #include <chrono>
 
@@ -1643,9 +1729,11 @@ static void main_resolve()
     auto client = Async_TCPSocket::make(*iocp, ec);
     assert(!ec);
 
+    unifex::inplace_stop_source stop_source;
+
     auto test_logic = [&]()
     {
-        return unifex::let_value(async_resolve(*iocp, "www.google.com", "80")
+        return unifex::let_value(stop_with(stop_source, async_resolve(*iocp, "www.google.com", "80"))
             , [&](EndpointsList_IPv4& endpoints)
         {
             return async_connect(*client, std::move(endpoints));
