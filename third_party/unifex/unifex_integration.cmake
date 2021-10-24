@@ -34,6 +34,13 @@ macro(setup_unifex_from_git)
             -Wno-shadow-field-in-constructor)
     endif ()
 
+    if (MSVC)
+        target_compile_options(unifex_Integrated INTERFACE
+            # declaration of 'receiver' hides global declaration
+            /wd4459
+            )
+    endif ()
+
 endmacro()
 
 

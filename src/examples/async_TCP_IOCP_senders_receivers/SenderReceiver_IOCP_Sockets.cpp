@@ -53,7 +53,6 @@
 // (one overload of set_value() and set_error()) and
 // Operation states (e.g., no copies are allowed). Mostly
 // to ensure this is true for learning purpose.
-#define XX_ENABLE_LOGS() 0
 
 template<typename Sender>
 using XX_Values = unifex::sender_value_types_t<Sender, std::variant, std::tuple>;
@@ -63,55 +62,38 @@ using XX_Errors = unifex::sender_error_types_t<Sender, std::variant>;
 template<typename Unknown>
 struct XX_Show;
 
-struct MoveOnly_Named
+struct MoveOnly
 {
-    MoveOnly_Named(const MoveOnly_Named&) = delete;
-    MoveOnly_Named& operator=(const MoveOnly_Named&) = delete;
-    MoveOnly_Named& operator=(MoveOnly_Named&&) = delete;
-    // Needed.
-    MoveOnly_Named(MoveOnly_Named&&) noexcept = default;
+    MoveOnly() noexcept = default;
+    ~MoveOnly() noexcept = default;
 
-protected:
-    ~MoveOnly_Named() noexcept = default;
-#if (XX_ENABLE_LOGS())
-    const char* _name = nullptr;
-    explicit MoveOnly_Named(const char* name) noexcept
-        : _name(name) {}
-    void log(const char* debug)
-    {
-        printf("[%p] '%s' - %s.\n", static_cast<void*>(this), _name, debug);
-    }
-#else
-    explicit MoveOnly_Named(const char*) noexcept {}
-    void log(const char*) { }
-#endif
+    MoveOnly(const MoveOnly&) = delete;
+    MoveOnly& operator=(const MoveOnly&) = delete;
+    MoveOnly& operator=(MoveOnly&&) = delete;
+    // Needed.
+    MoveOnly(MoveOnly&&) noexcept = default;
 };
 
-struct Operation_Log : MoveOnly_Named
+struct Operation_Base : MoveOnly
 {
     // Let say this is unmovable. See when this may be needed.
     // (E.g. move *before* operation's start()).
-    Operation_Log(Operation_Log&&) = delete;
-
-protected:
-    using MoveOnly_Named::MoveOnly_Named;
+    Operation_Base(Operation_Base&&) = delete;
+    Operation_Base() noexcept = default;
 };
 
 template<typename V, typename E>
-struct Sender_LogSimple : MoveOnly_Named
+struct Sender_LogSimple : MoveOnly
 {
     template<template <typename...> class Variant, template <typename...> class Tuple>
     using value_types = Variant<Tuple<V>>;
     template <template <typename...> class Variant>
     using error_types = Variant<E>;
     static constexpr bool sends_done = true;
-
-protected:
-    using MoveOnly_Named::MoveOnly_Named;
 };
 
 template<typename E>
-struct Sender_LogSimple<void, E> : MoveOnly_Named
+struct Sender_LogSimple<void, E> : MoveOnly
 {
     template<template <typename...> class Variant, template <typename...> class Tuple>
     using value_types = Variant<Tuple<>>;
@@ -119,13 +101,10 @@ struct Sender_LogSimple<void, E> : MoveOnly_Named
     template <template <typename...> class Variant>
     using error_types = Variant<E>;
     static constexpr bool sends_done = true;
-
-protected:
-    using MoveOnly_Named::MoveOnly_Named;
 };
 
 template<typename V>
-struct Sender_LogSimple<V, void> : MoveOnly_Named
+struct Sender_LogSimple<V, void> : MoveOnly
 {
     template<template <typename...> class Variant, template <typename...> class Tuple>
     using value_types = Variant<Tuple<V>>;
@@ -133,13 +112,10 @@ struct Sender_LogSimple<V, void> : MoveOnly_Named
     using error_types = Variant<>;
                         // ^^^^^^^ void
     static constexpr bool sends_done = true;
-
-protected:
-    using MoveOnly_Named::MoveOnly_Named;
 };
 
 template<>
-struct Sender_LogSimple<void, void> : MoveOnly_Named
+struct Sender_LogSimple<void, void> : MoveOnly
 {
     template<template <typename...> class Variant, template <typename...> class Tuple>
     using value_types = Variant<Tuple<>>;
@@ -148,9 +124,26 @@ struct Sender_LogSimple<void, void> : MoveOnly_Named
     using error_types = Variant<>;
                         // ^^^^^^^ void
     static constexpr bool sends_done = true;
+};
 
-protected:
-    using MoveOnly_Named::MoveOnly_Named;
+// WSA.
+struct Initialize_WSA
+{
+    explicit Initialize_WSA()
+    {
+        WSADATA wsa_data{};
+        const int error = ::WSAStartup(MAKEWORD(2, 2), &wsa_data);
+        assert(error == 0);
+    }
+    ~Initialize_WSA() noexcept
+    {
+        const int error = ::WSACleanup();
+        assert(error == 0);
+    }
+    Initialize_WSA(const Initialize_WSA&) = delete;
+    Initialize_WSA& operator=(const Initialize_WSA&) = delete;
+    Initialize_WSA(Initialize_WSA&&) = delete;
+    Initialize_WSA& operator=(Initialize_WSA&&) = delete;
 };
 
 static constexpr wi::WinULONG_PTR kClientKeyIOCP = 1;
@@ -175,7 +168,7 @@ struct Endpoint_IPv4
     {
         struct in_addr ipv4{};
         static_assert(sizeof(ipv4.s_addr) == sizeof(std::uint32_t));
-        const int ok = inet_pton(AF_INET, src, &ipv4);
+        const int ok = ::inet_pton(AF_INET, src, &ipv4);
         if (ok == 1)
         {
             Endpoint_IPv4 endpoint;
@@ -189,35 +182,22 @@ struct Endpoint_IPv4
 
 template<typename Receiver
     , typename StopToken = unifex::stop_token_type_t<Receiver>>
-struct Operation_Connect : Operation_Log
+struct Operation_Connect : Operation_Base
 {
-    explicit Operation_Connect(Receiver&& receiver, SOCKET socket, Endpoint_IPv4 endpoint) noexcept
-        : Operation_Log("connect")
-        , _receiver(std::move(receiver))
-        , _ov{{}, &Operation_Connect::on_connected, this}
-        , _socket(socket)
-        , _endpoint(endpoint)
-        , _stop_callback() {}
-
-    Receiver _receiver;
-    IOCP_Overlapped _ov;
-    SOCKET _socket = INVALID_SOCKET;
-    Endpoint_IPv4 _endpoint;
-
-    struct Stop_Callback
+    struct Callback_Stop
     {
         Operation_Connect* _self = nullptr;
-
-        void operator()() noexcept
-        {
-            _self->try_stop();
-        }
+        void operator()() noexcept { _self->try_stop(); }
     };
+    using StopCallback = typename StopToken::template callback_type<Callback_Stop>;
 
-    using StopCallback = typename StopToken::template callback_type<Stop_Callback>;
-    unifex::manual_lifetime<StopCallback> _stop_callback;
+    Receiver _receiver;
+    SOCKET _socket = INVALID_SOCKET;
+    Endpoint_IPv4 _endpoint;
+    IOCP_Overlapped _ov{{}, &Operation_Connect::on_connected, this};
+    unifex::manual_lifetime<StopCallback> _stop_callback{};
 
-    void try_stop()
+    void try_stop() noexcept
     {
         HANDLE handle = reinterpret_cast<HANDLE>(_socket);
         const BOOL ok = ::CancelIoEx(handle, _ov.ptr());
@@ -233,8 +213,6 @@ struct Operation_Connect : Operation_Log
     {
         assert(user_data);
         Operation_Connect& self = *static_cast<Operation_Connect*>(user_data);
-        self.log("on_connected");
-
         assert(entry.bytes_transferred == 0);
         assert(entry.completion_key == kClientKeyIOCP);
         assert(entry.overlapped == self._ov.ptr());
@@ -270,8 +248,6 @@ struct Operation_Connect : Operation_Log
 
     friend void tag_invoke(unifex::tag_t<unifex::start>, Operation_Connect& self) noexcept
     {
-        self.log("start");
-
         assert(self._socket != INVALID_SOCKET);
 
         LPFN_CONNECTEX ConnectEx = nullptr;
@@ -301,17 +277,16 @@ struct Operation_Connect : Operation_Log
                 || (wsa_error == WSAEINVAL));
         }
 
+        if constexpr (!unifex::is_stop_never_possible_v<StopToken>)
+        {
+            auto stop_token = unifex::get_stop_token(self._receiver);
+            self._stop_callback.construct(stop_token, Callback_Stop{ &self });
+        }
+
         struct sockaddr_in connect_to {};
         connect_to.sin_family = AF_INET;
         connect_to.sin_port = self._endpoint._port_network;
         connect_to.sin_addr.s_addr = self._endpoint._ip_network;
-
-        if constexpr (!unifex::is_stop_never_possible_v<StopToken>)
-        {
-            auto stop_token = unifex::get_stop_token(self._receiver);
-            self._stop_callback.construct(stop_token, Stop_Callback{&self});
-        }
-
         const BOOL finished = ConnectEx(self._socket
             , (sockaddr*)&connect_to
             , sizeof(connect_to)
@@ -339,54 +314,36 @@ struct Operation_Connect : Operation_Log
                 , std::error_code(wsa_error, std::system_category()));
             return;
         }
-
-        // In-progress.
     }
 };
 
 struct Sender_Connect : Sender_LogSimple<void, std::error_code>
 {
-    explicit Sender_Connect(SOCKET socket, Endpoint_IPv4 endpoint) noexcept
-        : Sender_LogSimple<void, std::error_code>("connect")
-        , _socket(socket)
-        , _endpoint(endpoint) { }
-
     SOCKET _socket = INVALID_SOCKET;
     Endpoint_IPv4 _endpoint;
 
-    template<typename This, typename Receiver>
-        requires std::is_same_v<Sender_Connect, std::remove_cvref_t<This>>
+    template<typename Receiver>
     friend auto tag_invoke(unifex::tag_t<unifex::connect>
-        , This&& self, Receiver&& receiver) noexcept
+        , Sender_Connect&& self, Receiver&& receiver) noexcept
     {
-        self.log("connect");
-        using Reveiver_ = std::remove_cvref_t<Receiver>;
-        return Operation_Connect<Reveiver_>(std::move(receiver)
-            , self._socket, self._endpoint);
+        using Receiver_ = std::remove_cvref_t<Receiver>;
+        return Operation_Connect<Receiver_>{{}
+            , std::move(receiver), self._socket, self._endpoint};
     }
 };
 
 template<typename Receiver>
-struct Operation_WriteSome : Operation_Log
+struct Operation_WriteSome : Operation_Base
 {
-    explicit Operation_WriteSome(Receiver&& receiver, SOCKET socket, std::span<char> data) noexcept
-        : Operation_Log("write_some")
-        , _receiver(std::move(receiver))
-        , _ov{{}, &Operation_WriteSome::on_sent, this}
-        , _socket(socket)
-        , _data(data) { }
-
     Receiver _receiver;
-    IOCP_Overlapped _ov;
     SOCKET _socket = INVALID_SOCKET;
     std::span<char> _data;
+    IOCP_Overlapped _ov{{}, &Operation_WriteSome::on_sent, this};
 
     static void on_sent(void* user_data, const wi::PortEntry& entry, std::error_code ec) noexcept
     {
         assert(user_data);
         Operation_WriteSome& self = *static_cast<Operation_WriteSome*>(user_data);
-        self.log("on_sent");
-
         assert(entry.bytes_transferred > 0);
         assert(entry.completion_key == kClientKeyIOCP);
         assert(entry.overlapped == self._ov.ptr());
@@ -403,8 +360,6 @@ struct Operation_WriteSome : Operation_Log
 
     friend void tag_invoke(unifex::tag_t<unifex::start>, Operation_WriteSome& self) noexcept
     {
-        self.log("start");
-
         assert(self._data.size() > 0);
         assert(self._data.size() <= (std::numeric_limits<ULONG>::max)());
 
@@ -443,48 +398,31 @@ struct Operation_WriteSome : Operation_Log
 
 struct Sender_WriteSome : Sender_LogSimple<std::size_t, std::error_code>
 {
-    explicit Sender_WriteSome(SOCKET socket, std::span<char> data) noexcept
-        : Sender_LogSimple<std::size_t, std::error_code>("write_some")
-        , _socket(socket)
-        , _data(data) { }
-
-    SOCKET _socket;
+    SOCKET _socket = INVALID_SOCKET;
     std::span<char> _data;
 
-    template <typename This, typename Receiver>
-        requires std::is_same_v<Sender_WriteSome, std::remove_cvref_t<This>>
+    template <typename Receiver>
     friend auto tag_invoke(unifex::tag_t<unifex::connect>
-        , This&& self, Receiver&& receiver) noexcept
+        , Sender_WriteSome&& self, Receiver&& receiver) noexcept
     {
-        self.log("connect");
-        using Reveiver_ = std::remove_cvref_t<Receiver>;
-        return Operation_WriteSome<Reveiver_>(std::move(receiver), self._socket, self._data);
+        using Receiver_ = std::remove_cvref_t<Receiver>;
+        return Operation_WriteSome<Receiver_>{{}, std::move(receiver), self._socket, self._data};
     }
 };
 
 template<typename Receiver>
-struct Operation_ReadSome : Operation_Log
+struct Operation_ReadSome : Operation_Base
 {
-    explicit Operation_ReadSome(Receiver&& receiver, SOCKET socket, std::span<char> buffer) noexcept
-        : Operation_Log("read_some")
-        , _receiver(std::move(receiver))
-        , _ov{{}, &Operation_ReadSome::on_received, this}
-        , _socket(socket)
-        , _buffer(buffer)
-        , _flags(0) { }
-
     Receiver _receiver;
-    IOCP_Overlapped _ov;
     SOCKET _socket = INVALID_SOCKET;
     std::span<char> _buffer;
-    DWORD _flags;
+    IOCP_Overlapped _ov{{}, &Operation_ReadSome::on_received, this};
+    DWORD _flags = 0;
 
     static void on_received(void* user_data, const wi::PortEntry& entry, std::error_code ec) noexcept
     {
         assert(user_data);
         Operation_ReadSome& self = *static_cast<Operation_ReadSome*>(user_data);
-        self.log("on_received");
-
         assert(entry.completion_key == kClientKeyIOCP);
         assert(entry.overlapped == self._ov.ptr());
 
@@ -501,8 +439,6 @@ struct Operation_ReadSome : Operation_Log
 
     friend void tag_invoke(unifex::tag_t<unifex::start>, Operation_ReadSome& self) noexcept
     {
-        self.log("start");
-
         assert(self._buffer.size() > 0);
 
         WSABUF receive_buffer{};
@@ -542,56 +478,38 @@ struct Operation_ReadSome : Operation_Log
 
 struct Sender_ReadSome : Sender_LogSimple<std::size_t, std::error_code>
 {
-    explicit Sender_ReadSome(SOCKET socket, std::span<char> buffer) noexcept
-        : Sender_LogSimple<size_t, std::error_code>("read_some")
-        , _socket(socket)
-        , _buffer(buffer) { }
-
     SOCKET _socket;
     std::span<char> _buffer;
 
-    template<typename This, typename Receiver>
-        requires std::is_same_v<Sender_ReadSome, std::remove_cvref_t<This>>
+    template<typename Receiver>
     friend auto tag_invoke(unifex::tag_t<unifex::connect>
-        , This&& self, Receiver&& receiver) noexcept
+        , Sender_ReadSome&& self, Receiver&& receiver) noexcept
     {
-        self.log("connect");
-        using Reveiver_ = std::remove_cvref_t<Receiver>;
-        return Operation_ReadSome<Reveiver_>(std::move(receiver), self._socket, self._buffer);
+        using Receiver_ = std::remove_cvref_t<Receiver>;
+        return Operation_ReadSome<Receiver_>{{}, std::move(receiver), self._socket, self._buffer};
     }
 };
 
 template<typename Receiver
     , typename _Async_TCPSocket /*= Async_TCPSocket*/>
-    struct Operation_Accept : Operation_Log
+    struct Operation_Accept : Operation_Base
 {
-    explicit Operation_Accept(Receiver&& receiver, SOCKET listen_socket, wi::IoCompletionPort& iocp) noexcept
-        : Operation_Log("accept")
-        , _receiver(std::move(receiver))
-        , _ov{{}, &Operation_Accept::on_accepted, this}
-        , _listen_socket(listen_socket)
-        , _iocp(&iocp)
-        , _buffer{}
-        , _client{} { }
-
-    Receiver _receiver;
-    IOCP_Overlapped _ov;
-    SOCKET _listen_socket = INVALID_SOCKET;
-    wi::IoCompletionPort* _iocp = nullptr;
-
     // As per AcceptEx() and GetAcceptExSockaddrs():
     // https://docs.microsoft.com/en-us/windows/win32/api/mswsock/nf-mswsock-acceptex
     // https://docs.microsoft.com/en-us/windows/win32/api/mswsock/nf-mswsock-getacceptexsockaddrs.
     static constexpr std::size_t kAddressLength = (sizeof(struct sockaddr) + 16);
+
+    Receiver _receiver;
+    SOCKET _listen_socket = INVALID_SOCKET;
+    wi::IoCompletionPort* _iocp = nullptr;
+    IOCP_Overlapped _ov{{}, &Operation_Accept::on_accepted, this};
     char _buffer[2 * kAddressLength]{};
-    _Async_TCPSocket _client;
+    _Async_TCPSocket _client{};
 
     static void on_accepted(void* user_data, const wi::PortEntry& entry, std::error_code ec) noexcept
     {
         assert(user_data);
         Operation_Accept& self = *static_cast<Operation_Accept*>(user_data);
-        self.log("on_accepted");
-
         assert(entry.bytes_transferred == 0);
         assert(entry.completion_key == kClientKeyIOCP);
         assert(entry.overlapped == self._ov.ptr());
@@ -614,15 +532,13 @@ template<typename Receiver
             , reinterpret_cast<char*>(&self._listen_socket)
             , sizeof(self._listen_socket));
         assert(error == 0);
-        // Close socket on error?
+        // Close socket on error.
 
         unifex::set_value(std::move(self._receiver), std::move(self._client));
     }
 
     friend void tag_invoke(unifex::tag_t<unifex::start>, Operation_Accept& self) noexcept
     {
-        self.log("start");
-
         std::error_code ec;
         auto client = _Async_TCPSocket::make(*self._iocp, ec);
         if (ec)
@@ -670,22 +586,15 @@ template<typename Receiver
 template<typename _Async_TCPSocket /*= Async_TCPSocket*/>
 struct Sender_Accept : Sender_LogSimple<_Async_TCPSocket, std::error_code>
 {
-    explicit Sender_Accept(SOCKET listen_socket, wi::IoCompletionPort& iocp) noexcept
-        : Sender_LogSimple<_Async_TCPSocket, std::error_code>("accept")
-        , _listen_socket(listen_socket)
-        , _iocp(&iocp) { }
-
-    SOCKET _listen_socket;
+    SOCKET _listen_socket = INVALID_SOCKET;
     wi::IoCompletionPort* _iocp = nullptr;
 
-    template<typename This, typename Receiver>
-        requires std::is_same_v<Sender_Accept, std::remove_cvref_t<This>>
+    template<typename Receiver>
     friend auto tag_invoke(unifex::tag_t<unifex::connect>
-        , This&& self, Receiver&& receiver) noexcept
+        , Sender_Accept&& self, Receiver&& receiver) noexcept
     {
-        self.log("connect");
-        using Reveiver_ = std::remove_cvref_t<Receiver>;
-        return Operation_Accept<Reveiver_, _Async_TCPSocket>(std::move(receiver), self._listen_socket, *self._iocp);
+        using Receiver_ = std::remove_cvref_t<Receiver>;
+        return Operation_Accept<Receiver_, _Async_TCPSocket>{{}, std::move(receiver), self._listen_socket, self._iocp};
     }
 };
 
@@ -741,27 +650,27 @@ struct Async_TCPSocket
 
     Sender_Connect async_connect(Endpoint_IPv4 endpoint) noexcept
     {
-        return Sender_Connect{_socket, endpoint};
+        return Sender_Connect{{}, _socket, endpoint};
     }
 
     // https://www.boost.org/doc/libs/1_77_0/doc/html/boost_asio/reference/basic_socket_acceptor/async_accept/overload3.html.
     Sender_Accept<Async_TCPSocket> async_accept() noexcept
     {
-        return Sender_Accept<Async_TCPSocket>{_socket, * _iocp};
+        return Sender_Accept<Async_TCPSocket>{{}, _socket, _iocp};
     }
 
     // https://www.boost.org/doc/libs/1_77_0/doc/html/boost_asio/reference/basic_stream_socket/async_write_some.html.
     // See also async_write().
     Sender_WriteSome async_write_some(std::span<char> data) noexcept
     {
-        return Sender_WriteSome{_socket, data};
+        return Sender_WriteSome{{}, _socket, data};
     }
 
     // https://www.boost.org/doc/libs/1_77_0/doc/html/boost_asio/reference/basic_stream_socket/async_read_some.html.
     // See also async_read().
     Sender_ReadSome async_read_some(std::span<char> buffer) noexcept
     {
-        return Sender_ReadSome{_socket, buffer};
+        return Sender_ReadSome{{}, _socket, buffer};
     }
 
     ~Async_TCPSocket() noexcept
@@ -809,26 +718,18 @@ private:
 };
 
 template<typename Receiver>
-struct Operation_IOCP_Schedule : Operation_Log
+struct Operation_IOCP_Schedule : Operation_Base
 {
     static constexpr wi::WinULONG_PTR kScheduleKeyIOCP = 2;
 
-    explicit Operation_IOCP_Schedule(Receiver&& receiver, wi::IoCompletionPort& iocp) noexcept
-        : Operation_Log("iocp_schedule")
-        , _receiver(std::move(receiver))
-        , _ov{{}, &Operation_IOCP_Schedule::on_scheduled, this}
-        , _iocp(&iocp) { }
-
     Receiver _receiver;
-    IOCP_Overlapped _ov;
     wi::IoCompletionPort* _iocp = nullptr;
+    IOCP_Overlapped _ov{{}, &Operation_IOCP_Schedule::on_scheduled, this};
 
     static void on_scheduled(void* user_data, const wi::PortEntry& entry, std::error_code ec) noexcept
     {
         assert(user_data);
         Operation_IOCP_Schedule& self = *static_cast<Operation_IOCP_Schedule*>(user_data);
-        self.log("on_scheduled");
-
         assert(entry.bytes_transferred == 0);
         assert(entry.completion_key == kScheduleKeyIOCP);
         assert(entry.overlapped == self._ov.ptr());
@@ -844,7 +745,6 @@ struct Operation_IOCP_Schedule : Operation_Log
 
     friend void tag_invoke(unifex::tag_t<unifex::start>, Operation_IOCP_Schedule& self) noexcept
     {
-        self.log("start");
         wi::PortEntry entry{};
         entry.bytes_transferred = 0;
         entry.completion_key = kScheduleKeyIOCP;
@@ -860,26 +760,20 @@ struct Operation_IOCP_Schedule : Operation_Log
 
 struct Sender_IOCP_Schedule : Sender_LogSimple<void, std::error_code>
 {
-    explicit Sender_IOCP_Schedule(wi::IoCompletionPort& iocp) noexcept
-        : Sender_LogSimple<void, std::error_code>("iocp_schedule")
-        , _iocp(&iocp) { }
-
     wi::IoCompletionPort* _iocp;
 
-    template<typename This, typename Receiver>
-        requires std::is_same_v<Sender_IOCP_Schedule, std::remove_cvref_t<This>>
+    template<typename Receiver>
     friend auto tag_invoke(unifex::tag_t<unifex::connect>
-        , This&& self, Receiver&& receiver) noexcept
+        , Sender_IOCP_Schedule&& self, Receiver&& receiver) noexcept
     {
-        self.log("connect");
-        using Reveiver_ = std::remove_cvref_t<Receiver>;
-        return Operation_IOCP_Schedule<Reveiver_>(std::move(receiver), *self._iocp);
+        using Receiver_ = std::remove_cvref_t<Receiver>;
+        return Operation_IOCP_Schedule<Receiver_>{{}, std::move(receiver), self._iocp};
     }
 };
 
 static Sender_IOCP_Schedule IOCP_schedule(wi::IoCompletionPort& iocp)
 {
-    return Sender_IOCP_Schedule{iocp};
+    return Sender_IOCP_Schedule{{}, &iocp};
 }
 
 struct IOCP_Scheduler
@@ -893,24 +787,9 @@ struct IOCP_Scheduler
 static_assert(unifex::scheduler<IOCP_Scheduler>);
 
 template<typename Receiver, typename Scheduler, typename Fallback>
-struct Operation_SelectOnceInN : Operation_Log
+struct Operation_SelectOnceInN : Operation_Base
 {
-    explicit Operation_SelectOnceInN(Receiver&& receiver, unsigned* counter, unsigned N, Scheduler scheduler, Fallback fallback) noexcept
-        : Operation_Log("select_once_in_n")
-        , _receiver(std::move(receiver))
-        , _counter(counter)
-        , _N(N)
-        , _scheduler(std::move(scheduler))
-        , _fallback(fallback)
-        , _op{} { }
-
-    Receiver _receiver;
-    unsigned* _counter;
-    unsigned _N;
-    Scheduler _scheduler; // no_unique_address
-    Fallback _fallback; // no_unique_address
-
-    struct OnScheduledReceiver
+    struct Receiver_OnScheduled
     {
         Operation_SelectOnceInN* _self = nullptr;
 
@@ -934,31 +813,31 @@ struct Operation_SelectOnceInN : Operation_Log
 
     using Op_Scheduler = decltype(unifex::connect(
         std::declval<Scheduler&>().schedule()
-        , std::declval<OnScheduledReceiver>()));
+        , std::declval<Receiver_OnScheduled>()));
     using Op_Fallback = decltype(unifex::connect(
         std::declval<Fallback&>().schedule()
-        , std::declval<OnScheduledReceiver>()));
-    using Storage_Scheduler = std::aligned_storage_t<sizeof(Op_Scheduler), alignof(Op_Scheduler)>;
-    using Storage_Fallback = std::aligned_storage_t<sizeof(Op_Fallback), alignof(Op_Fallback)>;
+        , std::declval<Receiver_OnScheduled>()));
 
-    using Op_State = std::variant<
-        std::monostate
-        , Storage_Scheduler
-        , Storage_Fallback>;
+    using Op_State = std::variant<std::monostate
+        , unifex::manual_lifetime<Op_Scheduler>
+        , unifex::manual_lifetime<Op_Fallback>>;
 
-    Op_State _op;
+    Receiver _receiver;
+    unsigned* _counter = nullptr;
+    unsigned _N = 0;
+    Scheduler _scheduler; // no_unique_address
+    Fallback _fallback; // no_unique_address
+    Op_State _op{};
 
     void destroy_state()
     {
-        if (void* scheduler = std::get_if<1>(&_op))
+        if (auto* scheduler = std::get_if<1>(&_op))
         {
-            auto* op = static_cast<Op_Scheduler*>(scheduler);
-            op->~Op_Scheduler();
+            scheduler->destruct();
         }
-        else if (void* fallback = std::get_if<2>(&_op))
+        else if (auto* fallback = std::get_if<2>(&_op))
         {
-            auto* op = static_cast<Op_Fallback*>(fallback);
-            op->~Op_Fallback();
+            fallback->destruct();
         }
         else
         {
@@ -974,20 +853,26 @@ struct Operation_SelectOnceInN : Operation_Log
         if ((counter % self._N) == 0)
         {
             // Select & run Scheduler.
-            void* storage = &self._op.template emplace<1>();
-            auto* op = new(storage) auto(unifex::connect(
-                self._scheduler.schedule()
-                , OnScheduledReceiver{&self}));
-            unifex::start(*op);
+            auto& storage = self._op.template emplace<1>();
+            storage.construct_with([&]()
+            {
+                return unifex::connect(
+                    self._scheduler.schedule()
+                    , Receiver_OnScheduled{&self});
+            });
+            unifex::start(storage.get());
         }
         else
         {
             // Select & run Fallback Scheduler.
-            void* storage = &self._op.template emplace<2>();
-            auto* op = new(storage) auto(unifex::connect(
-                self._fallback.schedule()
-                , OnScheduledReceiver{&self}));
-            unifex::start(*op);
+            auto& storage = self._op.template emplace<2>();
+            storage.construct_with([&]()
+            {
+                return unifex::connect(
+                    self._fallback.schedule()
+                    , Receiver_OnScheduled{&self});
+            });
+            unifex::start(storage.get());
         }
     }
 };
@@ -996,43 +881,28 @@ struct Operation_SelectOnceInN : Operation_Log
 template<typename Scheduler, typename Fallback>
 struct Sender_SelectOnceInN : Sender_LogSimple<void, void>
 {
-    explicit Sender_SelectOnceInN(unsigned* counter, unsigned N, Scheduler scheduler, Fallback fallback) noexcept
-        : Sender_LogSimple<void, void>("select_once_in_n")
-        , _counter(counter)
-        , _N(N)
-        , _scheduler(std::move(scheduler))
-        , _fallback(fallback) { }
-
-    unsigned* _counter;
-    unsigned _N;
+    unsigned* _counter = nullptr;
+    unsigned _N = 0;
     Scheduler _scheduler; // no_unique_address
     Fallback _fallback; // no_unique_address
 
-    template<typename This, typename Receiver>
-        requires std::is_same_v<Sender_SelectOnceInN, std::remove_cvref_t<This>>
+    template<typename Receiver>
     friend auto tag_invoke(unifex::tag_t<unifex::connect>
-        , This&& self, Receiver&& receiver) noexcept
+        , Sender_SelectOnceInN&& self, Receiver&& receiver) noexcept
     {
-        self.log("connect");
-        using Reveiver_ = std::remove_cvref_t<Receiver>;
-        return Operation_SelectOnceInN<Reveiver_, Scheduler, Fallback>(std::move(receiver)
-            , self._counter, self._N, self._scheduler, self._fallback);
+        using Receiver_ = std::remove_cvref_t<Receiver>;
+        return Operation_SelectOnceInN<Receiver_, Scheduler, Fallback>{{}
+            , std::move(receiver), self._counter, self._N, self._scheduler, self._fallback};
     }
 };
 
 template<typename Scheduler, typename Fallback = unifex::inline_scheduler>
 struct SelectOnceInN_Scheduler
 {
-    unsigned* _counter;
-    unsigned _N;
     Scheduler _scheduler; // no_unique_address
-    Fallback _fallback; // no_unique_address
-
-    explicit SelectOnceInN_Scheduler(Scheduler scheduler, unsigned& counter_now, unsigned n = 128, Fallback fallback = Fallback{}) noexcept
-        : _counter(&counter_now)
-        , _N(n)
-        , _scheduler(std::move(scheduler))
-        , _fallback(std::move(fallback)) {}
+    unsigned* _counter;
+    unsigned _N = 128;
+    Fallback _fallback{}; // no_unique_address
 
     bool operator==(const SelectOnceInN_Scheduler& rhs) const
     {
@@ -1045,7 +915,7 @@ struct SelectOnceInN_Scheduler
     
     Sender_SelectOnceInN<Scheduler, Fallback> schedule() noexcept
     {
-        return Sender_SelectOnceInN<Scheduler, Fallback>{_counter, _N, _scheduler, _fallback};
+        return Sender_SelectOnceInN<Scheduler, Fallback>{{}, _counter, _N, _scheduler, _fallback};
     }
 };
 
@@ -1064,10 +934,8 @@ static auto async_read(Async_TCPSocket& tcp_socket, std::span<char> data) noexce
         auto scheduler()
         {
             // Schedule once in 128 calls into IOCP, otherwise inline_sheduler.
-            return SelectOnceInN_Scheduler<IOCP_Scheduler>(
-                IOCP_Scheduler{_socket._iocp}
-                , _calls_count
-                , 128);
+            return SelectOnceInN_Scheduler<IOCP_Scheduler>{
+                IOCP_Scheduler{_socket._iocp}, &_calls_count, 128};
         }
     };
 
@@ -1108,15 +976,12 @@ static auto async_write(Async_TCPSocket& tcp_socket, std::span<char> data) noexc
         Async_TCPSocket& _socket;
         std::span<char> _data{};
         std::size_t _written_bytes = 0;
-        unsigned _recursion_counter = 0;
+        unsigned _calls_count = 0;
 
         auto scheduler()
         {
-            const unsigned unroll_depth = 128;
-            return SelectOnceInN_Scheduler<IOCP_Scheduler>(
-                IOCP_Scheduler{_socket._iocp}
-                , _recursion_counter
-                , unroll_depth);
+            return SelectOnceInN_Scheduler<IOCP_Scheduler>{
+                IOCP_Scheduler{_socket._iocp}, &_calls_count, 128};
         }
     };
 
@@ -1152,20 +1017,13 @@ static auto async_write(Async_TCPSocket& tcp_socket, std::span<char> data) noexc
 struct EndpointsList_IPv4
 {
     PADDRINFOEXW _address_list = nullptr;
-    explicit EndpointsList_IPv4(PADDRINFOEXW address_list) noexcept
-        : _address_list(address_list)
-    {
-    }
-    ~EndpointsList_IPv4()
-    {
-        destroy();
-    }
-    EndpointsList_IPv4(const EndpointsList_IPv4&) = default;
-    EndpointsList_IPv4& operator=(const EndpointsList_IPv4&) = default;
+    explicit EndpointsList_IPv4(PADDRINFOEXW list) noexcept
+        : _address_list{list} {}
+    ~EndpointsList_IPv4() { destroy(); }
+    EndpointsList_IPv4(const EndpointsList_IPv4&) = delete;
+    EndpointsList_IPv4& operator=(const EndpointsList_IPv4&) = delete;
     EndpointsList_IPv4(EndpointsList_IPv4&& rhs) noexcept
-        : _address_list(std::exchange(rhs._address_list, nullptr))
-    {
-    }
+        : _address_list(std::exchange(rhs._address_list, nullptr)) { }
     EndpointsList_IPv4& operator=(EndpointsList_IPv4&& rhs) noexcept
     {
         if (this != &rhs)
@@ -1247,7 +1105,7 @@ private:
 
 template<typename Receiver
     , typename StopToken = unifex::stop_token_type_t<Receiver>>
-struct Operation_Resolve : Operation_Log
+struct Operation_Resolve : Operation_Base
 {
     struct AddrInfo_Overlapped : WSAOVERLAPPED
     {
@@ -1256,48 +1114,27 @@ struct Operation_Resolve : Operation_Log
         Operation_Resolve* _self = nullptr;
     };
 
-    explicit Operation_Resolve(Receiver&& receiver, wi::IoCompletionPort& iocp, std::string_view host_name, std::string_view service_name_or_port) noexcept
-        : Operation_Log("resolve")
-        , _receiver(std::move(receiver))
-        , _iocp(&iocp)
-        , _host_name(host_name)
-        , _service_name_or_port(service_name_or_port)
-        , _whost_name()
-        , _wservice_name()
-        , _results(nullptr)
-        , _ov{{}, &Operation_Resolve::on_complete_WindowsThread, this}
-        , _iocp_ov{{}, &Operation_Resolve::on_addrinfo_finish, this}
-        , _stop_callback()
-        , _cancel_handle(nullptr)
-        , _atomic_stop()
-    { }
-
-    Receiver _receiver;
-    wi::IoCompletionPort* _iocp;
-    std::string_view _host_name;
-    std::string_view _service_name_or_port;
-
-    wchar_t _whost_name[256];
-    wchar_t _wservice_name[256];
-    PADDRINFOEXW _results;
-    AddrInfo_Overlapped _ov;
-    IOCP_Overlapped _iocp_ov;
-
-    struct Stop_Callback
+    struct Callback_Stop
     {
         Operation_Resolve* _self = nullptr;
-
-        void operator()() noexcept
-        {
-            _self->try_stop();
-        }
+        void operator()() noexcept { _self->try_stop(); }
     };
+    using StopCallback = typename StopToken::template callback_type<Callback_Stop>;
 
-    using StopCallback = typename StopToken::template callback_type<Stop_Callback>;
-    unifex::manual_lifetime<StopCallback> _stop_callback;
-    HANDLE _cancel_handle;
+    Receiver _receiver;
+    wi::IoCompletionPort* _iocp = nullptr;
+    std::string_view _host_name;
+    std::string_view _service_name_or_port;
+    // Output.
+    wchar_t _whost_name[256]{};
+    wchar_t _wservice_name[256]{};
+    PADDRINFOEXW _results = nullptr;
+    AddrInfo_Overlapped _ov{{}, &Operation_Resolve::on_complete_WindowsThread, this};
+    IOCP_Overlapped _iocp_ov{{}, &Operation_Resolve::on_addrinfo_finish, this};
+    unifex::manual_lifetime<StopCallback> _stop_callback{};
+    HANDLE _cancel_handle = INVALID_HANDLE_VALUE;
     // Points to `_cancel_handle` when cancel is available.
-    std::atomic<HANDLE*> _atomic_stop;
+    std::atomic<HANDLE*> _atomic_stop{};
 
     static void on_addrinfo_finish(void* user_data, const wi::PortEntry& entry, std::error_code ec)
     {
@@ -1305,7 +1142,7 @@ struct Operation_Resolve : Operation_Log
 
         if constexpr (!unifex::is_stop_never_possible_v<StopToken>)
         {
-            // #WWW: There is race if someone asks to stop now.
+            // #XXX: There is race if someone asks to stop now.
             self->_cancel_handle = nullptr; // Invalid now.
             self->_atomic_stop = nullptr;
             self->_stop_callback.destruct();
@@ -1333,7 +1170,7 @@ struct Operation_Resolve : Operation_Log
             return;
         }
         unifex::set_value(std::move(self->_receiver)
-            , EndpointsList_IPv4(self->_results));
+            , EndpointsList_IPv4{self->_results});
     }
 
     void on_complete_WindowsThread(DWORD error, DWORD bytes)
@@ -1411,7 +1248,7 @@ struct Operation_Resolve : Operation_Log
 
         if constexpr (!unifex::is_stop_never_possible_v<StopToken>)
         {
-            self._stop_callback.construct(stop_token, Stop_Callback{&self});
+            self._stop_callback.construct(stop_token, Callback_Stop{&self});
         }
 
         ADDRINFOEXW hints{};
@@ -1450,7 +1287,7 @@ struct Operation_Resolve : Operation_Log
 
         if constexpr (!unifex::is_stop_never_possible_v<StopToken>)
         {
-            // #WWW: there is race between doing a call to ::GetAddrInfoExW()
+            // #XXX: there is race between doing a call to ::GetAddrInfoExW()
             // - creating `_cancel_handle` - and stop request from
             // stop source. In this case we have to way to actually interrupt
             // ::GetAddrInfoExW() and will simply fail to stop.
@@ -1466,12 +1303,6 @@ struct Operation_Resolve : Operation_Log
 
 struct Sender_Resolve : Sender_LogSimple<EndpointsList_IPv4, std::error_code>
 {
-    explicit Sender_Resolve(wi::IoCompletionPort& iocp, std::string_view host_name, std::string_view service_name_or_port) noexcept
-        : Sender_LogSimple<EndpointsList_IPv4, std::error_code>("resolve")
-        , _iocp(&iocp)
-        , _host_name(host_name)
-        , _service_name_or_port(service_name_or_port) { }
-
     wi::IoCompletionPort* _iocp;
     std::string_view _host_name;
     std::string_view _service_name_or_port;
@@ -1480,9 +1311,9 @@ struct Sender_Resolve : Sender_LogSimple<EndpointsList_IPv4, std::error_code>
     friend auto tag_invoke(unifex::tag_t<unifex::connect>
         , Sender_Resolve&& self, Receiver&& receiver) noexcept
     {
-        self.log("connect");
-        using Reveiver_ = std::remove_cvref_t<Receiver>;
-        return Operation_Resolve<Reveiver_>(std::move(receiver), *self._iocp, self._host_name, self._service_name_or_port);
+        using Receiver_ = std::remove_cvref_t<Receiver>;
+        return Operation_Resolve<Receiver_>{{}
+            , std::move(receiver), self._iocp, self._host_name, self._service_name_or_port};
     }
 };
 
@@ -1493,51 +1324,31 @@ static Sender_Resolve async_resolve(wi::IoCompletionPort& iocp
     // OR port, like "80".
     , std::string_view service_name_or_port = {})
 {
-    return Sender_Resolve(iocp, host_name, service_name_or_port);
+    return Sender_Resolve{{}, &iocp, host_name, service_name_or_port};
 }
 
 template<typename Receiver, typename EndpointsRange>
-struct Operation_RangeConnect : Operation_Log
+struct Operation_RangeConnect : Operation_Base
 {
-    explicit Operation_RangeConnect(Receiver&& receiver, Async_TCPSocket& socket, EndpointsRange&& endpoints) noexcept
-        : Operation_Log("range_connect")
-        , _receiver(std::move(receiver))
-        , _socket(&socket)
-        , _endpoints(std::move(endpoints)) {}
-
-    Receiver _receiver;
-    Async_TCPSocket* _socket;
-    EndpointsRange _endpoints;
-
     struct Receiver_Connect
     {
         Operation_RangeConnect* _self;
-
-        void set_value() && noexcept
-        {
-            _self->on_connect_success();
-        }
-        void set_error(std::error_code ec) && noexcept
-        {
-            _self->on_connect_error(ec);
-        }
-        void set_error(std::exception_ptr) && noexcept
-        {
-            _self->on_connect_error(std::error_code(-1, std::system_category()));
-        }
-        void set_done() && noexcept
-        {
-            assert(false);
-        }
+        void set_value() && noexcept { _self->on_connect_success(); }
+        void set_error(std::error_code ec) && noexcept { _self->on_connect_error(ec); }
+        void set_error(std::exception_ptr) && noexcept { _self->on_connect_error(std::error_code(-1, std::system_category())); }
+        void set_done() && noexcept { assert(false); }
     };
 
     using Op = Operation_Connect<Receiver_Connect>;
     using Iterator = typename EndpointsRange::iterator;
-    using ConnectStorage = std::aligned_storage_t<sizeof(Op), alignof(Op)>;
 
-    Iterator _current_endpoint;
-    std::error_code _last_error;
-    ConnectStorage _op;
+    Receiver _receiver;
+    Async_TCPSocket* _socket = nullptr;
+    EndpointsRange _endpoints;
+    // Output.
+    Iterator _current_endpoint{};
+    std::error_code _last_error{};
+    unifex::manual_lifetime<Op> _op{};
 
     void on_connect_success() noexcept
     {
@@ -1555,9 +1366,7 @@ struct Operation_RangeConnect : Operation_Log
 
     void destroy_storage() noexcept
     {
-        void* storage = &_op;
-        Op* op = static_cast<Op*>(storage);
-        op->~Op();
+        _op.destruct();
     }
 
     void start_next_connect()
@@ -1568,17 +1377,17 @@ struct Operation_RangeConnect : Operation_Log
             return;
         }
 
-        void* storage = &_op;
-        Op* op = new(storage) auto(unifex::connect(
-            _socket->async_connect(*_current_endpoint)
-            , Receiver_Connect{this}));
-        unifex::start(*op);
+        _op.construct_with([&]()
+        {
+            return unifex::connect(
+                _socket->async_connect(*_current_endpoint)
+                , Receiver_Connect{this});
+        });
+        unifex::start(_op.get());
     }
 
     friend void tag_invoke(unifex::tag_t<unifex::start>, Operation_RangeConnect& self) noexcept
     {
-        self.log("start");
-
         self._last_error = std::error_code(-1, std::system_category()); // Empty.
         self._current_endpoint = std::begin(self._endpoints);
         self.start_next_connect();
@@ -1588,11 +1397,6 @@ struct Operation_RangeConnect : Operation_Log
 template<typename EndpointsRange>
 struct Sender_RangeConnect : Sender_LogSimple<Endpoint_IPv4, std::error_code>
 {
-    explicit Sender_RangeConnect(Async_TCPSocket& socket, EndpointsRange endpoints) noexcept
-        : Sender_LogSimple<Endpoint_IPv4, std::error_code>("range_connect")
-        , _socket(&socket)
-        , _endpoints(std::move(endpoints)) { }
-
     Async_TCPSocket* _socket;
     EndpointsRange _endpoints;
 
@@ -1600,10 +1404,9 @@ struct Sender_RangeConnect : Sender_LogSimple<Endpoint_IPv4, std::error_code>
     friend auto tag_invoke(unifex::tag_t<unifex::connect>
         , Sender_RangeConnect&& self, Receiver&& receiver) noexcept
     {
-        self.log("connect");
-        using Reveiver_ = std::remove_cvref_t<Receiver>;
-        return Operation_RangeConnect<Reveiver_, EndpointsRange>(std::move(receiver)
-            , *self._socket, std::move(self._endpoints));
+        using Receiver_ = std::remove_cvref_t<Receiver>;
+        return Operation_RangeConnect<Receiver_, EndpointsRange>{{}
+            , std::move(receiver), self._socket, std::move(self._endpoints)};
     }
 };
 
@@ -1612,7 +1415,7 @@ static auto async_connect(Async_TCPSocket& socket, EndpointsRange&& endpoints)
 {
     // #XXX: implement when_first() algorithm.
     using EndpointsRange_ = std::remove_cvref_t<EndpointsRange>;
-    return Sender_RangeConnect<EndpointsRange_>(socket, std::forward<EndpointsRange>(endpoints));
+    return Sender_RangeConnect<EndpointsRange_>{{}, &socket, std::forward<EndpointsRange>(endpoints)};
 }
 
 struct StopReceiver
@@ -1793,10 +1596,7 @@ static void main_resolve()
 
 int main(int argc, char**)
 {
-    WSADATA wsa_data{};
-    int error = ::WSAStartup(MAKEWORD(2, 2), &wsa_data);
-    assert(error == 0);
-
+    Initialize_WSA wsa;
     const auto start = std::chrono::steady_clock::now();
 
     if (argc >= 1)
@@ -1807,6 +1607,4 @@ int main(int argc, char**)
     const auto end = std::chrono::steady_clock::now();
     const float seconds = std::chrono::duration_cast<std::chrono::duration<float>>(end - start).count();
     printf("Elapsed: %.3f seconds.\n", seconds);
-
-    ::WSACleanup();
 }
