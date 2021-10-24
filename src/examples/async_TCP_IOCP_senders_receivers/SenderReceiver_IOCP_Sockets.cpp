@@ -246,15 +246,13 @@ struct Operation_Connect : Operation_Base
         unifex::set_value(std::move(self._receiver));
     }
 
-    friend void tag_invoke(unifex::tag_t<unifex::start>, Operation_Connect& self) noexcept
+    void start() & noexcept
     {
-        assert(self._socket != INVALID_SOCKET);
-
         LPFN_CONNECTEX ConnectEx = nullptr;
         {
             GUID GuidConnectEx = WSAID_CONNECTEX;
             DWORD bytes = 0;
-            const int error = ::WSAIoctl(self._socket
+            const int error = ::WSAIoctl(_socket
                 , SIO_GET_EXTENSION_FUNCTION_POINTER
                 , &GuidConnectEx, sizeof(GuidConnectEx)
                 , &ConnectEx, sizeof(ConnectEx)
@@ -268,7 +266,7 @@ struct Operation_Connect : Operation_Base
             local_address.sin_family = AF_INET;
             local_address.sin_addr.s_addr = INADDR_ANY;
             local_address.sin_port = 0;
-            int ok = ::bind(self._socket
+            int ok = ::bind(_socket
                 , reinterpret_cast<SOCKADDR*>(&local_address)
                 , sizeof(local_address));
             const int wsa_error = ::WSAGetLastError();
@@ -279,28 +277,28 @@ struct Operation_Connect : Operation_Base
 
         if constexpr (!unifex::is_stop_never_possible_v<StopToken>)
         {
-            auto stop_token = unifex::get_stop_token(self._receiver);
-            self._stop_callback.construct(stop_token, Callback_Stop{ &self });
+            auto stop_token = unifex::get_stop_token(_receiver);
+            _stop_callback.construct(stop_token, Callback_Stop{this});
         }
 
         struct sockaddr_in connect_to {};
         connect_to.sin_family = AF_INET;
-        connect_to.sin_port = self._endpoint._port_network;
-        connect_to.sin_addr.s_addr = self._endpoint._ip_network;
-        const BOOL finished = ConnectEx(self._socket
+        connect_to.sin_port = _endpoint._port_network;
+        connect_to.sin_addr.s_addr = _endpoint._ip_network;
+        const BOOL finished = ConnectEx(_socket
             , (sockaddr*)&connect_to
             , sizeof(connect_to)
             , nullptr
             , 0
             , nullptr
-            , self._ov.ptr());
+            , _ov.ptr());
         if (finished)
         {
             wi::PortEntry entry;
             entry.bytes_transferred = 0;
             entry.completion_key = kClientKeyIOCP;
-            entry.overlapped = self._ov.ptr();
-            self.on_connected(&self, entry, std::error_code());
+            entry.overlapped = _ov.ptr();
+            on_connected(this, entry, std::error_code());
             return;
         }
         const int wsa_error = ::WSAGetLastError();
@@ -309,8 +307,8 @@ struct Operation_Connect : Operation_Base
             wi::PortEntry entry;
             entry.bytes_transferred = 0;
             entry.completion_key = kClientKeyIOCP;
-            entry.overlapped = self._ov.ptr();
-            self.on_connected(&self, entry
+            entry.overlapped = _ov.ptr();
+            on_connected(this, entry
                 , std::error_code(wsa_error, std::system_category()));
             return;
         }
@@ -323,12 +321,11 @@ struct Sender_Connect : Sender_LogSimple<void, std::error_code>
     Endpoint_IPv4 _endpoint;
 
     template<typename Receiver>
-    friend auto tag_invoke(unifex::tag_t<unifex::connect>
-        , Sender_Connect&& self, Receiver&& receiver) noexcept
+    auto connect(Receiver&& receiver) && noexcept
     {
         using Receiver_ = std::remove_cvref_t<Receiver>;
         return Operation_Connect<Receiver_>{{}
-            , std::move(receiver), self._socket, self._endpoint};
+            , std::move(receiver), _socket, _endpoint};
     }
 };
 
@@ -358,28 +355,28 @@ struct Operation_WriteSome : Operation_Base
             , std::size_t(entry.bytes_transferred));
     }
 
-    friend void tag_invoke(unifex::tag_t<unifex::start>, Operation_WriteSome& self) noexcept
+    void start() & noexcept
     {
-        assert(self._data.size() > 0);
-        assert(self._data.size() <= (std::numeric_limits<ULONG>::max)());
+        assert(_data.size() > 0);
+        assert(_data.size() <= (std::numeric_limits<ULONG>::max)());
 
         WSABUF send_buffer{};
-        send_buffer.buf = self._data.data();
-        send_buffer.len = ULONG(self._data.size());
-        const int error = ::WSASend(self._socket
+        send_buffer.buf = _data.data();
+        send_buffer.len = ULONG(_data.size());
+        const int error = ::WSASend(_socket
             , &send_buffer, 1
             , nullptr/*bytes_send*/
             , 0/*flags*/
-            , self._ov.ptr()
+            , _ov.ptr()
             , nullptr);
         if (error == 0)
         {
             // Completed synchronously.
             wi::PortEntry entry;
-            entry.bytes_transferred = wi::WinDWORD(self._data.size());
+            entry.bytes_transferred = wi::WinDWORD(_data.size());
             entry.completion_key = kClientKeyIOCP;
-            entry.overlapped = self._ov.ptr();
-            self.on_sent(&self, entry, std::error_code());
+            entry.overlapped = _ov.ptr();
+            on_sent(this, entry, std::error_code());
             return;
         }
         const int wsa_error = ::WSAGetLastError();
@@ -388,8 +385,8 @@ struct Operation_WriteSome : Operation_Base
             wi::PortEntry entry;
             entry.bytes_transferred = 0;
             entry.completion_key = kClientKeyIOCP;
-            entry.overlapped = self._ov.ptr();
-            self.on_sent(&self, entry
+            entry.overlapped = _ov.ptr();
+            on_sent(this, entry
                 , std::error_code(wsa_error, std::system_category()));
             return;
         }
@@ -402,11 +399,10 @@ struct Sender_WriteSome : Sender_LogSimple<std::size_t, std::error_code>
     std::span<char> _data;
 
     template <typename Receiver>
-    friend auto tag_invoke(unifex::tag_t<unifex::connect>
-        , Sender_WriteSome&& self, Receiver&& receiver) noexcept
+    auto connect(Receiver&& receiver) && noexcept
     {
         using Receiver_ = std::remove_cvref_t<Receiver>;
-        return Operation_WriteSome<Receiver_>{{}, std::move(receiver), self._socket, self._data};
+        return Operation_WriteSome<Receiver_>{{}, std::move(receiver), _socket, _data};
     }
 };
 
@@ -437,20 +433,20 @@ struct Operation_ReadSome : Operation_Base
             , std::size_t(entry.bytes_transferred));
     }
 
-    friend void tag_invoke(unifex::tag_t<unifex::start>, Operation_ReadSome& self) noexcept
+    void start() & noexcept
     {
-        assert(self._buffer.size() > 0);
+        assert(_buffer.size() > 0);
 
         WSABUF receive_buffer{};
-        receive_buffer.buf = self._buffer.data();
-        receive_buffer.len = ULONG(self._buffer.size());
-        self._flags = MSG_PARTIAL;
+        receive_buffer.buf = _buffer.data();
+        receive_buffer.len = ULONG(_buffer.size());
+        _flags = MSG_PARTIAL;
         DWORD received = 0;
-        const int error = ::WSARecv(self._socket
+        const int error = ::WSARecv(_socket
             , &receive_buffer, 1
             , &received
-            , &self._flags
-            , self._ov.ptr()
+            , &_flags
+            , _ov.ptr()
             , nullptr);
         if (error == 0)
         {
@@ -458,8 +454,8 @@ struct Operation_ReadSome : Operation_Base
             wi::PortEntry entry;
             entry.bytes_transferred = received;
             entry.completion_key = kClientKeyIOCP;
-            entry.overlapped = self._ov.ptr();
-            self.on_received(&self, entry, std::error_code());
+            entry.overlapped = _ov.ptr();
+            on_received(this, entry, std::error_code());
             return;
         }
         const int wsa_error = ::WSAGetLastError();
@@ -468,8 +464,8 @@ struct Operation_ReadSome : Operation_Base
             wi::PortEntry entry;
             entry.bytes_transferred = 0;
             entry.completion_key = kClientKeyIOCP;
-            entry.overlapped = self._ov.ptr();
-            self.on_received(&self, entry
+            entry.overlapped = _ov.ptr();
+            on_received(this, entry
                 , std::error_code(wsa_error, std::system_category()));
             return;
         }
@@ -482,11 +478,10 @@ struct Sender_ReadSome : Sender_LogSimple<std::size_t, std::error_code>
     std::span<char> _buffer;
 
     template<typename Receiver>
-    friend auto tag_invoke(unifex::tag_t<unifex::connect>
-        , Sender_ReadSome&& self, Receiver&& receiver) noexcept
+    auto connect(Receiver&& receiver) && noexcept
     {
         using Receiver_ = std::remove_cvref_t<Receiver>;
-        return Operation_ReadSome<Receiver_>{{}, std::move(receiver), self._socket, self._buffer};
+        return Operation_ReadSome<Receiver_>{{}, std::move(receiver), _socket, _buffer};
     }
 };
 
@@ -537,36 +532,36 @@ template<typename Receiver
         unifex::set_value(std::move(self._receiver), std::move(self._client));
     }
 
-    friend void tag_invoke(unifex::tag_t<unifex::start>, Operation_Accept& self) noexcept
+    void start() & noexcept
     {
         std::error_code ec;
-        auto client = _Async_TCPSocket::make(*self._iocp, ec);
+        auto client = _Async_TCPSocket::make(*_iocp, ec);
         if (ec)
         {
-            unifex::set_error(std::move(self._receiver), ec);
+            unifex::set_error(std::move(_receiver), ec);
             return;
         }
         assert(client);
-        self._client = std::move(*client);
+        _client = std::move(*client);
 
         using Self = Operation_Accept<Receiver, _Async_TCPSocket>;
         const DWORD address_length = DWORD(Self::kAddressLength);
         DWORD bytes_received = 0;
-        const BOOL ok = ::AcceptEx(self._listen_socket, self._client._socket
-            , self._buffer
+        const BOOL ok = ::AcceptEx(_listen_socket, _client._socket
+            , _buffer
             , 0
             , address_length
             , address_length
             , &bytes_received
-            , self._ov.ptr());
+            , _ov.ptr());
         if (ok == TRUE)
         {
             // Completed synchronously.
             wi::PortEntry entry;
             entry.bytes_transferred = bytes_received;
             entry.completion_key = kClientKeyIOCP;
-            entry.overlapped = self._ov.ptr();
-            self.on_accepted(&self, entry, std::error_code());
+            entry.overlapped = _ov.ptr();
+            on_accepted(this, entry, std::error_code());
             return;
         }
         const int wsa_error = ::WSAGetLastError();
@@ -575,8 +570,8 @@ template<typename Receiver
             wi::PortEntry entry;
             entry.bytes_transferred = 0;
             entry.completion_key = kClientKeyIOCP;
-            entry.overlapped = self._ov.ptr();
-            self.on_accepted(&self, entry
+            entry.overlapped = _ov.ptr();
+            on_accepted(this, entry
                 , std::error_code(wsa_error, std::system_category()));
             return;
         }
@@ -590,11 +585,10 @@ struct Sender_Accept : Sender_LogSimple<_Async_TCPSocket, std::error_code>
     wi::IoCompletionPort* _iocp = nullptr;
 
     template<typename Receiver>
-    friend auto tag_invoke(unifex::tag_t<unifex::connect>
-        , Sender_Accept&& self, Receiver&& receiver) noexcept
+    auto connect(Receiver&& receiver) && noexcept
     {
         using Receiver_ = std::remove_cvref_t<Receiver>;
-        return Operation_Accept<Receiver_, _Async_TCPSocket>{{}, std::move(receiver), self._listen_socket, self._iocp};
+        return Operation_Accept<Receiver_, _Async_TCPSocket>{{}, std::move(receiver), _listen_socket, _iocp};
     }
 };
 
@@ -743,17 +737,18 @@ struct Operation_IOCP_Schedule : Operation_Base
         unifex::set_value(std::move(self._receiver));
     }
 
-    friend void tag_invoke(unifex::tag_t<unifex::start>, Operation_IOCP_Schedule& self) noexcept
+    void start() & noexcept
     {
         wi::PortEntry entry{};
         entry.bytes_transferred = 0;
         entry.completion_key = kScheduleKeyIOCP;
-        entry.overlapped = self._ov.ptr();
+        entry.overlapped = _ov.ptr();
         std::error_code ec;
-        self._iocp->post(entry, ec);
+        _iocp->post(entry, ec);
         if (ec)
         {
-            self.on_scheduled(&self, entry, ec);
+            on_scheduled(this, entry, ec);
+            return;
         }
     }
 };
@@ -763,11 +758,10 @@ struct Sender_IOCP_Schedule : Sender_LogSimple<void, std::error_code>
     wi::IoCompletionPort* _iocp;
 
     template<typename Receiver>
-    friend auto tag_invoke(unifex::tag_t<unifex::connect>
-        , Sender_IOCP_Schedule&& self, Receiver&& receiver) noexcept
+    auto connect(Receiver&& receiver) && noexcept
     {
         using Receiver_ = std::remove_cvref_t<Receiver>;
-        return Operation_IOCP_Schedule<Receiver_>{{}, std::move(receiver), self._iocp};
+        return Operation_IOCP_Schedule<Receiver_>{{}, std::move(receiver), _iocp};
     }
 };
 
@@ -845,32 +839,32 @@ struct Operation_SelectOnceInN : Operation_Base
         }
     }
 
-    friend void tag_invoke(unifex::tag_t<unifex::start>, Operation_SelectOnceInN& self) noexcept
+    void start() & noexcept
     {
-        assert(self._counter);
-        assert(self._N > 0);
-        const unsigned counter = ++(*self._counter);
-        if ((counter % self._N) == 0)
+        assert(_counter);
+        assert(_N > 0);
+        const unsigned counter = ++(*_counter);
+        if ((counter % _N) == 0)
         {
             // Select & run Scheduler.
-            auto& storage = self._op.template emplace<1>();
+            auto& storage = _op.template emplace<1>();
             storage.construct_with([&]()
             {
                 return unifex::connect(
-                    self._scheduler.schedule()
-                    , Receiver_OnScheduled{&self});
+                    _scheduler.schedule()
+                    , Receiver_OnScheduled{this});
             });
             unifex::start(storage.get());
         }
         else
         {
             // Select & run Fallback Scheduler.
-            auto& storage = self._op.template emplace<2>();
+            auto& storage = _op.template emplace<2>();
             storage.construct_with([&]()
             {
                 return unifex::connect(
-                    self._fallback.schedule()
-                    , Receiver_OnScheduled{&self});
+                    _fallback.schedule()
+                    , Receiver_OnScheduled{this});
             });
             unifex::start(storage.get());
         }
@@ -887,12 +881,11 @@ struct Sender_SelectOnceInN : Sender_LogSimple<void, void>
     Fallback _fallback; // no_unique_address
 
     template<typename Receiver>
-    friend auto tag_invoke(unifex::tag_t<unifex::connect>
-        , Sender_SelectOnceInN&& self, Receiver&& receiver) noexcept
+    auto connect(Receiver&& receiver) && noexcept
     {
         using Receiver_ = std::remove_cvref_t<Receiver>;
         return Operation_SelectOnceInN<Receiver_, Scheduler, Fallback>{{}
-            , std::move(receiver), self._counter, self._N, self._scheduler, self._fallback};
+            , std::move(receiver), _counter, _N, _scheduler, _fallback};
     }
 };
 
@@ -1209,32 +1202,32 @@ struct Operation_Resolve : Operation_Base
         (void)error; // Not much can be done.
     }
 
-    friend void tag_invoke(unifex::tag_t<unifex::start>, Operation_Resolve& self) noexcept
+    void start() & noexcept
     {
         // See also "Internationalized Domain Names":
         // https://docs.microsoft.com/en-us/windows/win32/api/ws2tcpip/nf-ws2tcpip-getaddrinfoexw#internationalized-domain-names.
-        if (self._host_name.size() > 0)
+        if (_host_name.size() > 0)
         {
             const int error = ::MultiByteToWideChar(CP_ACP
                 , MB_PRECOMPOSED
-                , self._host_name.data()
-                , int(self._host_name.size())
-                , self._whost_name
-                , int(std::size(self._whost_name)));
+                , _host_name.data()
+                , int(_host_name.size())
+                , _whost_name
+                , int(std::size(_whost_name)));
             if (error == 0)
             {
                 assert(false);
                 return;
             }
         }
-        if (self._service_name_or_port.size() > 0)
+        if (_service_name_or_port.size() > 0)
         {
             const int error = ::MultiByteToWideChar(CP_ACP
                 , MB_PRECOMPOSED
-                , self._service_name_or_port.data()
-                , int(self._service_name_or_port.size())
-                , self._wservice_name
-                , int(std::size(self._wservice_name)));
+                , _service_name_or_port.data()
+                , int(_service_name_or_port.size())
+                , _wservice_name
+                , int(std::size(_wservice_name)));
             if (error == 0)
             {
                 assert(false);
@@ -1243,45 +1236,45 @@ struct Operation_Resolve : Operation_Base
         }
 
         // Don't even alloc (?) cancel handle if not stoppable.
-        auto stop_token = unifex::get_stop_token(self._receiver);
-        HANDLE* cancel_handle = (stop_token.stop_possible() ? &self._cancel_handle : nullptr);
+        auto stop_token = unifex::get_stop_token(_receiver);
+        HANDLE* cancel_ptr = (stop_token.stop_possible() ? &_cancel_handle : nullptr);
 
         if constexpr (!unifex::is_stop_never_possible_v<StopToken>)
         {
-            self._stop_callback.construct(stop_token, Callback_Stop{&self});
+            _stop_callback.construct(stop_token, Callback_Stop{this});
         }
 
         ADDRINFOEXW hints{};
         hints.ai_family = AF_INET;
         hints.ai_socktype = SOCK_STREAM;
         hints.ai_protocol = IPPROTO_TCP;
-        const INT error = ::GetAddrInfoExW(self._whost_name, self._wservice_name
+        const INT error = ::GetAddrInfoExW(_whost_name, _wservice_name
             , NS_ALL
             , nullptr // lpNspId
             , &hints
-            , &self._results
+            , &_results
             , nullptr // timeout
-            , &self._ov
+            , &_ov
             , &OnAddrInfoEx_CompleteCallback
-            , cancel_handle);
+            , cancel_ptr);
         if (error == 0)
         {
             wi::PortEntry entry{};
-            entry.overlapped = self._iocp_ov.ptr();
+            entry.overlapped = _iocp_ov.ptr();
             entry.completion_key = 0;
             entry.bytes_transferred = 0;
             // Handles concurrent stop request if any.
-            on_addrinfo_finish(&self, entry, std::error_code());
+            on_addrinfo_finish(this, entry, std::error_code());
             return;
         }
         if (error != WSA_IO_PENDING)
         {
             wi::PortEntry entry{};
-            entry.overlapped = self._iocp_ov.ptr();
+            entry.overlapped = _iocp_ov.ptr();
             entry.completion_key = error;
             entry.bytes_transferred = 0;
             // Handles concurrent stop request if any.
-            on_addrinfo_finish(&self, entry, std::error_code());
+            on_addrinfo_finish(this, entry, std::error_code());
             return;
         }
 
@@ -1291,13 +1284,11 @@ struct Operation_Resolve : Operation_Base
             // - creating `_cancel_handle` - and stop request from
             // stop source. In this case we have to way to actually interrupt
             // ::GetAddrInfoExW() and will simply fail to stop.
-            if (cancel_handle)
+            if (cancel_ptr)
             {
-                self._atomic_stop = cancel_handle;
+                _atomic_stop = cancel_ptr;
             }
         }
-
-        // In progress.
     }
 };
 
@@ -1308,12 +1299,11 @@ struct Sender_Resolve : Sender_LogSimple<EndpointsList_IPv4, std::error_code>
     std::string_view _service_name_or_port;
 
     template<typename Receiver>
-    friend auto tag_invoke(unifex::tag_t<unifex::connect>
-        , Sender_Resolve&& self, Receiver&& receiver) noexcept
+    auto connect(Receiver&& receiver) && noexcept
     {
         using Receiver_ = std::remove_cvref_t<Receiver>;
         return Operation_Resolve<Receiver_>{{}
-            , std::move(receiver), self._iocp, self._host_name, self._service_name_or_port};
+            , std::move(receiver), _iocp, _host_name, _service_name_or_port};
     }
 };
 
@@ -1386,11 +1376,11 @@ struct Operation_RangeConnect : Operation_Base
         unifex::start(_op.get());
     }
 
-    friend void tag_invoke(unifex::tag_t<unifex::start>, Operation_RangeConnect& self) noexcept
+    void start() & noexcept
     {
-        self._last_error = std::error_code(-1, std::system_category()); // Empty.
-        self._current_endpoint = std::begin(self._endpoints);
-        self.start_next_connect();
+        _last_error = std::error_code(-1, std::system_category()); // Empty.
+        _current_endpoint = std::begin(_endpoints);
+        start_next_connect();
     }
 };
 
@@ -1401,12 +1391,11 @@ struct Sender_RangeConnect : Sender_LogSimple<Endpoint_IPv4, std::error_code>
     EndpointsRange _endpoints;
 
     template<typename Receiver>
-    friend auto tag_invoke(unifex::tag_t<unifex::connect>
-        , Sender_RangeConnect&& self, Receiver&& receiver) noexcept
+    auto connect(Receiver&& receiver) && noexcept
     {
         using Receiver_ = std::remove_cvref_t<Receiver>;
         return Operation_RangeConnect<Receiver_, EndpointsRange>{{}
-            , std::move(receiver), self._socket, std::move(self._endpoints)};
+            , std::move(receiver), _socket, std::move(_endpoints)};
     }
 };
 
@@ -1415,13 +1404,15 @@ static auto async_connect(Async_TCPSocket& socket, EndpointsRange&& endpoints)
 {
     // #XXX: implement when_first() algorithm.
     using EndpointsRange_ = std::remove_cvref_t<EndpointsRange>;
-    return Sender_RangeConnect<EndpointsRange_>{{}, &socket, std::forward<EndpointsRange>(endpoints)};
+    return Sender_RangeConnect<EndpointsRange_>{{}, &socket
+        , std::forward<EndpointsRange>(endpoints)};
 }
 
 struct StopReceiver
 {
     bool& _finish;
 
+    // Catch-all.
     friend void tag_invoke(auto, StopReceiver&& self, auto&&...) noexcept
     {
         self._finish = true;
