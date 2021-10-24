@@ -1,0 +1,7 @@
+if (TARGET win_socks)
+    add_executable(unifex_TCP_simple_echo "main.cpp")
+    set_all_warnings(unifex_TCP_simple_echo PRIVATE)
+    target_link_libraries(unifex_TCP_simple_echo PRIVATE win_socks)
+else()
+    message("[x] No win_socks library found. Skipping unifex_TCP_simple_echo.")
+endif()

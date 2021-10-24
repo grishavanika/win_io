@@ -1,0 +1,10 @@
+if (TARGET unifex_Integrated)
+    add_library(win_socks INTERFACE "include/unifex_IOCP_sockets.hpp")
+    target_include_directories(win_socks INTERFACE include)
+
+    target_link_libraries(win_socks INTERFACE Ws2_32.lib Mswsock.lib)
+    target_link_libraries(win_socks INTERFACE win_io)
+    target_link_libraries(win_socks INTERFACE unifex_Integrated)
+else()
+    message("[x] No unifex library found. Skipping win_socks.")
+endif()

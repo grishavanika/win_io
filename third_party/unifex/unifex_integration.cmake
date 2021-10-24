@@ -19,6 +19,7 @@ macro(setup_unifex_from_git)
     add_subdirectory(${unifex_SOURCE_DIR} ${unifex_BINARY_DIR} EXCLUDE_FROM_ALL)
 
     print_target_source_dir(unifex)
+    set_target_properties(unifex PROPERTIES FOLDER third_party)
 
     if (clang_on_msvc)
         target_compile_definitions(unifex PUBLIC

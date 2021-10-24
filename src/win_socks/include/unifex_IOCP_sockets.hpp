@@ -10,9 +10,6 @@
 #endif
 #include <MSWSock.h>
 
-#pragma comment(lib, "Ws2_32.lib")
-#pragma comment(lib, "Mswsock.lib")
-
 #include <win_io/detail/io_completion_port.h>
 
 #include <unifex/sender_concepts.hpp>
@@ -915,7 +912,7 @@ struct SelectOnceInN_Scheduler
 static_assert(unifex::scheduler<SelectOnceInN_Scheduler<unifex::inline_scheduler>>);
 static_assert(unifex::scheduler<SelectOnceInN_Scheduler<IOCP_Scheduler>>);
 
-static auto async_read(Async_TCPSocket& tcp_socket, std::span<char> data) noexcept
+inline auto async_read(Async_TCPSocket& tcp_socket, std::span<char> data) noexcept
 {
     struct State
     {
@@ -962,7 +959,7 @@ static auto async_read(Async_TCPSocket& tcp_socket, std::span<char> data) noexce
 }
 
 // Same as async_read().
-static auto async_write(Async_TCPSocket& tcp_socket, std::span<char> data) noexcept
+inline auto async_write(Async_TCPSocket& tcp_socket, std::span<char> data) noexcept
 {
     struct State
     {
@@ -1308,7 +1305,7 @@ struct Sender_Resolve : Sender_LogSimple<EndpointsList_IPv4, std::error_code>
 };
 
 // IPv4.
-static Sender_Resolve async_resolve(wi::IoCompletionPort& iocp
+inline Sender_Resolve async_resolve(wi::IoCompletionPort& iocp
     , std::string_view host_name
     // Either service name, like "http", see "%WINDIR%\system32\drivers\etc\services" on Windows
     // OR port, like "80".
@@ -1400,7 +1397,7 @@ struct Sender_RangeConnect : Sender_LogSimple<Endpoint_IPv4, std::error_code>
 };
 
 template<typename EndpointsRange>
-static auto async_connect(Async_TCPSocket& socket, EndpointsRange&& endpoints)
+inline auto async_connect(Async_TCPSocket& socket, EndpointsRange&& endpoints)
 {
     // #XXX: implement when_first() algorithm.
     using EndpointsRange_ = std::remove_cvref_t<EndpointsRange>;
@@ -1440,162 +1437,10 @@ static void IOCP_sync_wait(wi::IoCompletionPort& iocp, Sender&& sender)
 }
 
 template<typename StopSource, typename Sender>
-static auto stop_with(StopSource& stop_source, Sender&& sender)
+inline auto stop_with(StopSource& stop_source, Sender&& sender)
 {
     return unifex::with_query_value(
         std::forward<Sender>(sender)
         , unifex::get_stop_token
         , stop_source.get_token());
-}
-
-#include <vector>
-#include <chrono>
-
-#include <cstring>
-
-static void main_client_server()
-{
-    std::error_code ec;
-    auto iocp = wi::IoCompletionPort::make(ec);
-    assert(!ec);
-    assert(iocp);
-
-    std::optional<Async_TCPSocket> client_socket = Async_TCPSocket::make(*iocp, ec);
-    assert(!ec);
-    assert(client_socket);
-
-    std::optional<Async_TCPSocket> server_socket = Async_TCPSocket::make(*iocp, ec);
-    assert(!ec);
-    assert(server_socket);
-
-    auto endpoint = Endpoint_IPv4::from_string("127.0.0.1", 60260);
-    assert(endpoint);
-
-    std::vector<char> write_data;
-    write_data.resize(1ull * 1024 * 1024 * 1024 * 1, 'x');
-    std::vector<char> read_data;
-    read_data.resize(write_data.size());
-
-    std::vector<char> server_data;
-    server_data.resize(write_data.size());
-
-    // https://docs.microsoft.com/en-us/windows/win32/winsock/using-so-reuseaddr-and-so-exclusiveaddruse.
-    int enable_reuse = 1;
-    int error = ::setsockopt(server_socket->_socket, SOL_SOCKET, SO_REUSEADDR
-        , reinterpret_cast<char*>(&enable_reuse), sizeof(enable_reuse));
-    assert(error == 0);
-
-    struct sockaddr_in server_address{};
-    server_address.sin_family = AF_INET;
-    server_address.sin_addr.s_addr = endpoint->_ip_network;
-    server_address.sin_port = endpoint->_port_network;
-    error = ::bind(server_socket->_socket
-        , reinterpret_cast<SOCKADDR*>(&server_address)
-        , sizeof(server_address));
-    assert(error == 0);
-
-    error = ::listen(server_socket->_socket, 16);
-    assert(error == 0);
-
-    struct ServerState
-    {
-        Async_TCPSocket _client;
-    };
-
-    auto server_logic = [&]()
-    {
-        return unifex::let_value(unifex::just(ServerState())
-            , [&](ServerState& state)
-        {
-            return unifex::sequence(
-                server_socket->async_accept()
-                    | unifex::then([&state](Async_TCPSocket client)
-                {
-                    state._client = std::move(client);
-                    printf("[Server] Accepted.\n");
-                })
-                , async_read(state._client, server_data)
-                    | unifex::then([&](std::size_t bytes_transferred)
-                {
-                    printf("[Server] Received %zu bytes.\n", bytes_transferred);
-                })
-                , async_write(state._client, server_data)
-                    | unifex::then([&state](std::size_t bytes_transferred)
-                {
-                    printf("[Server] Sent %zu bytes.\n", bytes_transferred);
-                    state._client.disconnect();
-                    (void)state;
-                })
-                );
-        });
-    };
-
-    auto client_logic = [&]()
-    {
-        return unifex::sequence(
-            client_socket->async_connect(*endpoint)
-                | unifex::then([]()
-            {
-                printf("[Client] Connected.\n");
-            })
-            , async_write(*client_socket, write_data)
-                | unifex::then([](std::size_t bytes_transferred)
-            {
-                printf("[Client] Sent %zu bytes.\n", bytes_transferred);
-            })
-            , async_read(*client_socket, read_data)
-                | unifex::then([&](std::size_t bytes_transferred)
-            {
-                printf("[Client] Received %zu bytes.\n", bytes_transferred);
-            })
-            );
-    };
-
-    IOCP_sync_wait(*iocp, unifex::when_all(server_logic(), client_logic()));
-
-    assert(memcmp(write_data.data(), read_data.data(), write_data.size()) == 0);
-    assert(memcmp(write_data.data(), server_data.data(), write_data.size()) == 0);
-}
-
-static void main_resolve()
-{
-    std::error_code ec;
-    auto iocp = wi::IoCompletionPort::make(ec);
-    assert(!ec);
-    assert(iocp);
-
-    auto client = Async_TCPSocket::make(*iocp, ec);
-    assert(!ec);
-
-    unifex::inplace_stop_source stop_source;
-
-    auto test_logic = [&]()
-    {
-        return unifex::let_value(stop_with(stop_source, async_resolve(*iocp, "www.google.com", "80"))
-            , [&](EndpointsList_IPv4& endpoints)
-        {
-            return async_connect(*client, std::move(endpoints));
-        })
-            | unifex::then([](Endpoint_IPv4)
-        {
-            printf("Connected!\n");
-        });
-    };
-
-    IOCP_sync_wait(*iocp, test_logic());
-}
-
-int main(int argc, char**)
-{
-    Initialize_WSA wsa;
-    const auto start = std::chrono::steady_clock::now();
-
-    if (argc >= 1)
-        main_client_server();
-    else if (argc >= 2)
-        main_resolve();
-
-    const auto end = std::chrono::steady_clock::now();
-    const float seconds = std::chrono::duration_cast<std::chrono::duration<float>>(end - start).count();
-    printf("Elapsed: %.3f seconds.\n", seconds);
 }
