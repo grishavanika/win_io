@@ -1,5 +1,8 @@
 #include "unifex_IOCP_sockets.hpp"
 
+#include <unifex/let_done.hpp>
+#include <unifex/let_error.hpp>
+
 #include <chrono>
 
 int main()
@@ -25,6 +28,16 @@ int main()
             | unifex::then([](Endpoint_IPv4)
         {
             printf("Connected!\n");
+        })
+            | unifex::let_done([]()
+        {
+            printf("Cancelled.\n");
+            return unifex::just();
+        })
+            | unifex::let_error([]()
+        {
+            printf("Error.\n");
+            return unifex::just();
         });
     };
 
