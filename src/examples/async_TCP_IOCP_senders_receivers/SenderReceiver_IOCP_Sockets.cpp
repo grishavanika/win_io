@@ -187,7 +187,8 @@ struct Endpoint_IPv4
     }
 };
 
-template<typename Receiver>
+template<typename Receiver
+    , typename StopToken = unifex::stop_token_type_t<Receiver>>
 struct Operation_Connect : Operation_Log
 {
     explicit Operation_Connect(Receiver&& receiver, SOCKET socket, Endpoint_IPv4 endpoint) noexcept
@@ -195,12 +196,38 @@ struct Operation_Connect : Operation_Log
         , _receiver(std::move(receiver))
         , _ov{{}, &Operation_Connect::on_connected, this}
         , _socket(socket)
-        , _endpoint(endpoint) {}
+        , _endpoint(endpoint)
+        , _stop_callback() {}
 
     Receiver _receiver;
     IOCP_Overlapped _ov;
     SOCKET _socket = INVALID_SOCKET;
     Endpoint_IPv4 _endpoint;
+
+    struct Stop_Callback
+    {
+        Operation_Connect* _self = nullptr;
+
+        void operator()() noexcept
+        {
+            _self->try_stop();
+        }
+    };
+
+    using StopCallback = typename StopToken::template callback_type<Stop_Callback>;
+    unifex::manual_lifetime<StopCallback> _stop_callback;
+
+    void try_stop()
+    {
+        HANDLE handle = reinterpret_cast<HANDLE>(_socket);
+        const BOOL ok = ::CancelIoEx(handle, _ov.ptr());
+        if (!ok)
+        {
+            const DWORD error = GetLastError();
+            // No request to cancel. Finished?
+            assert(error == ERROR_NOT_FOUND);
+        }
+    }
 
     static void on_connected(void* user_data, const wi::PortEntry& entry, std::error_code ec) noexcept
     {
@@ -211,6 +238,17 @@ struct Operation_Connect : Operation_Log
         assert(entry.bytes_transferred == 0);
         assert(entry.completion_key == kClientKeyIOCP);
         assert(entry.overlapped == self._ov.ptr());
+
+        if constexpr (!unifex::is_stop_never_possible_v<StopToken>)
+        {
+            self._stop_callback.destruct();
+            auto stop_token = unifex::get_stop_token(self._receiver);
+            if (stop_token.stop_requested())
+            {
+                unifex::set_done(std::move(self._receiver));
+                return;
+            }
+        }
 
         if (ec)
         {
@@ -267,6 +305,12 @@ struct Operation_Connect : Operation_Log
         connect_to.sin_family = AF_INET;
         connect_to.sin_port = self._endpoint._port_network;
         connect_to.sin_addr.s_addr = self._endpoint._ip_network;
+
+        if constexpr (!unifex::is_stop_never_possible_v<StopToken>)
+        {
+            auto stop_token = unifex::get_stop_token(self._receiver);
+            self._stop_callback.construct(stop_token, Stop_Callback{&self});
+        }
 
         const BOOL finished = ConnectEx(self._socket
             , (sockaddr*)&connect_to
