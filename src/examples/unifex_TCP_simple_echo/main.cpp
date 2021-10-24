@@ -20,8 +20,8 @@ int main()
     assert(!ec);
     assert(server_socket);
 
-    auto endpoint = Endpoint_IPv4::from_string("127.0.0.1", 60260);
-    assert(endpoint);
+    server_socket->bind_and_listen(Endpoint_IPv4::any(60260), ec);
+    assert(!ec);
 
     std::vector<char> write_data;
     write_data.resize(1ull * 1024 * 1024 * 1024 * 1, 'x');
@@ -30,24 +30,6 @@ int main()
 
     std::vector<char> server_data;
     server_data.resize(write_data.size());
-
-    // https://docs.microsoft.com/en-us/windows/win32/winsock/using-so-reuseaddr-and-so-exclusiveaddruse.
-    int enable_reuse = 1;
-    int error = ::setsockopt(server_socket->_socket, SOL_SOCKET, SO_REUSEADDR
-        , reinterpret_cast<char*>(&enable_reuse), sizeof(enable_reuse));
-    assert(error == 0);
-
-    struct sockaddr_in server_address{};
-    server_address.sin_family = AF_INET;
-    server_address.sin_addr.s_addr = endpoint->_ip_network;
-    server_address.sin_port = endpoint->_port_network;
-    error = ::bind(server_socket->_socket
-        , reinterpret_cast<SOCKADDR*>(&server_address)
-        , sizeof(server_address));
-    assert(error == 0);
-
-    error = ::listen(server_socket->_socket, 16);
-    assert(error == 0);
 
     struct ServerState
     {
@@ -84,6 +66,9 @@ int main()
 
     auto client_logic = [&]()
     {
+        auto endpoint = Endpoint_IPv4::from_string("127.0.0.1", 60260);
+        assert(endpoint);
+
         return unifex::sequence(
             client_socket->async_connect(*endpoint)
                 | unifex::then([]()

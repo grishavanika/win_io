@@ -175,6 +175,14 @@ struct Endpoint_IPv4
         }
         return std::nullopt;
     }
+
+    static Endpoint_IPv4 any(std::uint16_t port_host)
+    {
+        Endpoint_IPv4 endpoint;
+        endpoint._port_network = ::htons(port_host);
+        endpoint._ip_network = INADDR_ANY;
+        return endpoint;
+    }
 };
 
 template<typename Receiver
@@ -338,7 +346,6 @@ struct Operation_WriteSome : Operation_Base
     {
         assert(user_data);
         Operation_WriteSome& self = *static_cast<Operation_WriteSome*>(user_data);
-        assert(entry.bytes_transferred > 0);
         assert(entry.completion_key == kClientKeyIOCP);
         assert(entry.overlapped == self._ov.ptr());
 
@@ -354,7 +361,6 @@ struct Operation_WriteSome : Operation_Base
 
     void start() & noexcept
     {
-        assert(_data.size() > 0);
         assert(_data.size() <= (std::numeric_limits<ULONG>::max)());
 
         WSABUF send_buffer{};
@@ -425,15 +431,21 @@ struct Operation_ReadSome : Operation_Base
             return;
         }
 
-        assert(entry.bytes_transferred > 0);
+        // Match to Asio behavior, complete_iocp_recv(), socket_ops.ipp.
+        if ((entry.bytes_transferred == 0)
+            && (self._buffer.size() != 0))
+        {
+            unifex::set_error(std::move(self._receiver)
+                , std::error_code(-1, std::system_category()));
+            return;
+        }
+
         unifex::set_value(std::move(self._receiver)
             , std::size_t(entry.bytes_transferred));
     }
 
     void start() & noexcept
     {
-        assert(_buffer.size() > 0);
-
         WSABUF receive_buffer{};
         receive_buffer.buf = _buffer.data();
         receive_buffer.len = ULONG(_buffer.size());
@@ -637,6 +649,44 @@ struct Async_TCPSocket
             return std::nullopt;
         }
         return std::make_optional(std::move(socket));
+    }
+
+    void bind_and_listen(Endpoint_IPv4 bind_on // Endpoint_IPv4::from_port(...)
+        , std::error_code& ec, int backlog = SOMAXCONN, bool reuse = true)
+    {
+        if (reuse)
+        {
+            int enable_reuse = 1;
+            const int error = ::setsockopt(_socket
+                , SOL_SOCKET
+                , SO_REUSEADDR
+                , reinterpret_cast<char*>(&enable_reuse), sizeof(enable_reuse));
+            if (error != 0)
+            {
+                ec = std::error_code(::WSAGetLastError(), std::system_category());
+                return;
+            }
+        }
+
+        struct sockaddr_in address {};
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = bind_on._ip_network;
+        address.sin_port = bind_on._port_network;
+        int error = ::bind(_socket
+            , reinterpret_cast<SOCKADDR*>(&address)
+            , sizeof(address));
+        if (error != 0)
+        {
+            ec = std::error_code(::WSAGetLastError(), std::system_category());
+            return;
+        }
+
+        error = ::listen(_socket, backlog);
+        if (error != 0)
+        {
+            ec = std::error_code(::WSAGetLastError(), std::system_category());
+            return;
+        }
     }
 
     Sender_Connect async_connect(Endpoint_IPv4 endpoint) noexcept
@@ -981,7 +1031,7 @@ inline auto async_write(Async_TCPSocket& tcp_socket, std::span<char> data) noexc
         return unifex::repeat_effect_until(
             unifex::defer([&state]()
             {
-                assert(state._written_bytes < state._data.size());
+                assert(state._written_bytes <= state._data.size());
                 const std::size_t remaining = (state._data.size() - state._written_bytes);
                 return unifex::on(state.scheduler(),
                     state._socket.async_write_some(state._data.last(remaining))
@@ -1434,6 +1484,36 @@ static void IOCP_sync_wait(wi::IoCompletionPort& iocp, Sender&& sender)
             ov->_callback(ov->_user_data, entry, ec);
         }
     }
+}
+
+// Missing from unifex generic utilities.
+struct Receiver_Detached
+{
+    void* _ptr = nullptr;
+    void (*_free)(void*) = nullptr;
+
+    // Catch-all.
+    friend void tag_invoke(auto, Receiver_Detached&& self, auto&&...) noexcept
+    {
+        self._free(self._ptr);
+    }
+};
+
+template<typename Sender>
+inline static auto start_detached(Sender&& sender)
+{
+    using Op = decltype(unifex::connect(std::forward<Sender>(sender), Receiver_Detached{}));
+    void* ptr = malloc(sizeof(Op));
+    assert(ptr);
+
+    Receiver_Detached cleanup{ptr, [](void* ptr)
+    {
+        Op* op = static_cast<Op*>(ptr);
+        op->~Op();
+        free(ptr);
+    }};
+    auto* op = new(ptr) auto(unifex::connect(std::forward<Sender>(sender), std::move(cleanup)));
+    unifex::start(*op);
 }
 
 template<typename StopSource, typename Sender>
