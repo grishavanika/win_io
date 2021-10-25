@@ -417,6 +417,7 @@ struct Operation_ReadSome : Operation_Base
     std::span<char> _buffer;
     IOCP_Overlapped _ov{{}, &Operation_ReadSome::on_received, this};
     DWORD _flags = 0;
+    WSABUF _wsa_buf{};
 
     static void on_received(void* user_data, const wi::PortEntry& entry, std::error_code ec) noexcept
     {

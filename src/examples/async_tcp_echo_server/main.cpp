@@ -8,6 +8,7 @@
 struct Connection
 {
     Async_TCPSocket _socket;
+    unsigned _id = 0;
     char _buffer[1024]{};
 };
 
@@ -18,7 +19,7 @@ static auto read_some_write(Connection& connection)
         return unifex::let_value(connection._socket.async_read_some(connection._buffer)
             , [&connection](std::size_t& n)
         {
-            printf("read='%.*s'.\n", int(n), connection._buffer);
+            printf("[%u] read='%.*s'.\n", connection._id, int(n), connection._buffer);
             return async_write(connection._socket, std::span(connection._buffer, n))
                 // Ignore return value.
                 | unifex::then([](auto&&...) {});
@@ -26,31 +27,31 @@ static auto read_some_write(Connection& connection)
     }));
 }
 
-static void run_client(Async_TCPSocket socket)
+static void run_client(Async_TCPSocket socket, unsigned id)
 {
     // Alloc & start new connection, detached.
     start_detached(unifex::defer(
-        [connection = Connection{std::move(socket)}]() mutable
+        [connection = Connection{std::move(socket), id}]() mutable
     {
-        printf("Client connected.\n");
+        printf("[%u] Client connected.\n", connection._id);
         return read_some_write(connection);
     }) 
-        | unifex::let_error([]()
+        | unifex::let_error([id]()
     {
-        printf("Client error.\n");
+        printf("[%u] Client error.\n", id);
         return unifex::just();
     }));
 }
 
-static auto run_server(Async_TCPSocket& server)
+static auto run_server(Async_TCPSocket& server, unsigned& counter)
 {
-    return unifex::repeat_effect(unifex::defer([&server]()
+    return unifex::repeat_effect(unifex::defer([&]()
     {
         return server.async_accept();
     })
-        | unifex::then([](Async_TCPSocket socket)
+        | unifex::then([&](Async_TCPSocket socket)
     {
-        run_client(std::move(socket));
+        run_client(std::move(socket), ++counter);
     }));
 }
 
@@ -69,5 +70,6 @@ int main()
     server->bind_and_listen(Endpoint_IPv4::any(60260), ec);
     assert(!ec);
 
-    IOCP_sync_wait(*iocp, run_server(*server));
+    unsigned counter = 0;
+    IOCP_sync_wait(*iocp, run_server(*server, counter));
 }
