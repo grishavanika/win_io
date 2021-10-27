@@ -602,6 +602,14 @@ struct Sender_Accept : Sender_LogSimple<_Async_TCPSocket, std::error_code>
     }
 };
 
+struct BufferRef : WSABUF
+{
+    explicit BufferRef()
+        : WSABUF{0, nullptr} {}
+    explicit BufferRef(std::uint32_t size, void* data)
+        : WSABUF{ULONG(size), static_cast<CHAR*>(data)} {}
+};
+
 struct Async_TCPSocket
 {
     SOCKET _socket = INVALID_SOCKET;
@@ -707,12 +715,22 @@ struct Async_TCPSocket
     {
         return Sender_WriteSome{{}, _socket, data};
     }
+    Sender_WriteSome async_write_some(std::span<BufferRef> many_buffers) noexcept
+    {
+        (void)many_buffers;
+        return Sender_WriteSome{{}, _socket, std::span<char>()};
+    }
 
     // https://www.boost.org/doc/libs/1_77_0/doc/html/boost_asio/reference/basic_stream_socket/async_read_some.html.
     // See also async_read().
     Sender_ReadSome async_read_some(std::span<char> buffer) noexcept
     {
         return Sender_ReadSome{{}, _socket, buffer};
+    }
+    Sender_ReadSome async_read_some(std::span<BufferRef> many_buffers) noexcept
+    {
+        (void)many_buffers;
+        return Sender_ReadSome{{}, _socket, std::span<char>()};
     }
 
     ~Async_TCPSocket() noexcept
@@ -1009,6 +1027,14 @@ inline auto async_read(Async_TCPSocket& tcp_socket, std::span<char> data) noexce
     });
 }
 
+inline auto async_read(Async_TCPSocket& tcp_socket
+    // `many_buffers` must be alive for a duration of the call.
+    , std::span<BufferRef> many_buffers)
+{
+    (void)tcp_socket;
+    (void)many_buffers;
+}
+
 // Same as async_read().
 inline auto async_write(Async_TCPSocket& tcp_socket, std::span<char> data) noexcept
 {
@@ -1053,6 +1079,14 @@ inline auto async_write(Async_TCPSocket& tcp_socket, std::span<char> data) noexc
                 return state._written_bytes;
             });
     });
+}
+
+inline auto async_write(Async_TCPSocket& tcp_socket
+    // `many_buffers` must be alive for a duration of the call.
+    , std::span<BufferRef> many_buffers)
+{
+    (void)tcp_socket;
+    (void)many_buffers;
 }
 
 struct EndpointsList_IPv4
