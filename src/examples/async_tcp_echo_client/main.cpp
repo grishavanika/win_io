@@ -1,27 +1,27 @@
 #include "unifex_IOCP_sockets.hpp"
 #include <cstdio>
 
-static auto unroll(wi::IoCompletionPort& iocp, unsigned& calls_count)
+template<typename Sender>
+static auto unroll(Sender&& sender, wi::IoCompletionPort& iocp, unsigned& calls_count)
 {
-    return SelectOnceInN_Scheduler<IOCP_Scheduler>{
-        IOCP_Scheduler{&iocp}, &calls_count, 16};
+    auto scheduler = SelectOnceInN_Scheduler<IOCP_Scheduler>{
+        IOCP_Scheduler{&iocp}, &calls_count, 32};
+    return unifex::on(std::move(scheduler), std::forward<Sender>(sender));
 }
 
-static auto write_some_read(Async_TCPSocket& socket, std::span<char> buffer)
+static auto write_read(Async_TCPSocket& socket, std::span<char> buffer)
 {
-    return unifex::let_value(unifex::just(unsigned(0))
-        , [&, buffer](unsigned& calls_count)
+    return unifex::defer([&, buffer, calls_count = unsigned(0)]() mutable
     {
-        return unifex::repeat_effect(unifex::defer([&, buffer]()
+        return unifex::repeat_effect(unifex::defer([&]()
         {
             return unifex::let_value(async_write(socket, buffer)
-                , [&, buffer](std::size_t& n)
+                , [&](std::size_t& n)
             {
                 printf("write='%.*s'.\n", int(n), buffer.data());
-                return unifex::on(unroll(*socket._iocp, calls_count)
-                    , async_read(socket, buffer)
-                        // Ignore return value.
-                        | unifex::then([](auto&&...) {}));
+                return unroll(async_read(socket, buffer), *socket._iocp, calls_count)
+                    // Ignore return value.
+                    | unifex::then([](auto&&...) {});
             });
         }));
     });
@@ -38,7 +38,7 @@ static auto run_client(Async_TCPSocket& socket
         return unifex::let_value(async_connect(socket, std::move(endpoints))
             , [&, buffer](Endpoint_IPv4)
         {
-            return write_some_read(socket, buffer);
+            return write_read(socket, buffer);
         });
     });
 }
