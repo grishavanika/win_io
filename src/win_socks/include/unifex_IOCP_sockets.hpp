@@ -185,34 +185,70 @@ struct Endpoint_IPv4
     }
 };
 
-template<typename Receiver
-    , typename StopToken = unifex::stop_token_type_t<Receiver>>
-struct Operation_Connect : Operation_Base
+template<typename Receiver, typename Op>
+struct Helper_HandleStopToken
 {
     struct Callback_Stop
     {
-        Operation_Connect* _self = nullptr;
-        void operator()() noexcept { _self->try_stop(); }
+        Op* _op = nullptr;
+        void operator()() noexcept { _op->try_stop(); }
     };
+    using StopToken = unifex::stop_token_type_t<Receiver>;
     using StopCallback = typename StopToken::template callback_type<Callback_Stop>;
 
+    unifex::manual_lifetime<StopCallback> _stop_callback{};
+
+    bool try_construct(const Receiver& receiver, Op& op) noexcept
+    {
+        if constexpr (!unifex::is_stop_never_possible_v<StopToken>)
+        {
+            auto stop_token = unifex::get_stop_token(receiver);
+            _stop_callback.construct(stop_token, Callback_Stop{&op});
+            return stop_token.stop_possible();
+        }
+        else
+        {
+            return false;
+        }
+    }
+
+    bool try_finalize(const Receiver& receiver) noexcept
+    {
+        if constexpr (!unifex::is_stop_never_possible_v<StopToken>)
+        {
+            _stop_callback.destruct();
+            auto stop_token = unifex::get_stop_token(receiver);
+            return stop_token.stop_requested();
+        }
+        else
+        {
+            return false;
+        }
+    }
+};
+
+inline void Helper_CanceloEx(SOCKET socket, OVERLAPPED* ov)
+{
+    HANDLE handle = reinterpret_cast<HANDLE>(socket);
+    const BOOL ok = ::CancelIoEx(handle, ov);
+    if (!ok)
+    {
+        const DWORD error = GetLastError();
+        // No request to cancel. Finished?
+        assert(error == ERROR_NOT_FOUND);
+    }
+}
+
+template<typename Receiver>
+struct Operation_Connect : Operation_Base
+{
     Receiver _receiver;
     SOCKET _socket = INVALID_SOCKET;
     Endpoint_IPv4 _endpoint;
     IOCP_Overlapped _ov{{}, &Operation_Connect::on_connected, this};
-    unifex::manual_lifetime<StopCallback> _stop_callback{};
+    Helper_HandleStopToken<Receiver, Operation_Connect> _cancel_impl{};
 
-    void try_stop() noexcept
-    {
-        HANDLE handle = reinterpret_cast<HANDLE>(_socket);
-        const BOOL ok = ::CancelIoEx(handle, _ov.ptr());
-        if (!ok)
-        {
-            const DWORD error = GetLastError();
-            // No request to cancel. Finished?
-            assert(error == ERROR_NOT_FOUND);
-        }
-    }
+    void try_stop() noexcept { Helper_CanceloEx(_socket, _ov.ptr()); }
 
     static void on_connected(void* user_data, const wi::PortEntry& entry, std::error_code ec) noexcept
     {
@@ -222,17 +258,11 @@ struct Operation_Connect : Operation_Base
         assert(entry.completion_key == kClientKeyIOCP);
         assert(entry.overlapped == self._ov.ptr());
 
-        if constexpr (!unifex::is_stop_never_possible_v<StopToken>)
+        if (self._cancel_impl.try_finalize(self._receiver))
         {
-            self._stop_callback.destruct();
-            auto stop_token = unifex::get_stop_token(self._receiver);
-            if (stop_token.stop_requested())
-            {
-                unifex::set_done(std::move(self._receiver));
-                return;
-            }
+            unifex::set_done(std::move(self._receiver));
+            return;
         }
-
         if (ec)
         {
             unifex::set_error(std::move(self._receiver), ec);
@@ -280,11 +310,7 @@ struct Operation_Connect : Operation_Base
                 || (wsa_error == WSAEINVAL));
         }
 
-        if constexpr (!unifex::is_stop_never_possible_v<StopToken>)
-        {
-            auto stop_token = unifex::get_stop_token(_receiver);
-            _stop_callback.construct(stop_token, Callback_Stop{this});
-        }
+        _cancel_impl.try_construct(_receiver, *this);
 
         struct sockaddr_in connect_to {};
         connect_to.sin_family = AF_INET;
@@ -415,6 +441,9 @@ struct Operation_WriteSome : Operation_Base
     SOCKET _socket = INVALID_SOCKET;
     OneBufferOwnerOrManyRef _buffers;
     IOCP_Overlapped _ov{{}, &Operation_WriteSome::on_sent, this};
+    Helper_HandleStopToken<Receiver, Operation_WriteSome> _cancel_impl{};
+
+    void try_stop() noexcept { Helper_CanceloEx(_socket, _ov.ptr()); }
 
     static void on_sent(void* user_data, const wi::PortEntry& entry, std::error_code ec) noexcept
     {
@@ -423,6 +452,11 @@ struct Operation_WriteSome : Operation_Base
         assert(entry.completion_key == kClientKeyIOCP);
         assert(entry.overlapped == self._ov.ptr());
 
+        if (self._cancel_impl.try_finalize(self._receiver))
+        {
+            unifex::set_done(std::move(self._receiver));
+            return;
+        }
         if (ec)
         {
             unifex::set_error(std::move(self._receiver), ec);
@@ -435,6 +469,8 @@ struct Operation_WriteSome : Operation_Base
 
     void start() & noexcept
     {
+        _cancel_impl.try_construct(_receiver, *this);
+
         auto buffers = _buffers.as_ref();
         DWORD bytes_sent = 0;
         const int error = ::WSASend(_socket
@@ -489,6 +525,9 @@ struct Operation_ReadSome : Operation_Base
     IOCP_Overlapped _ov{{}, &Operation_ReadSome::on_received, this};
     DWORD _flags = 0;
     WSABUF _wsa_buf{};
+    Helper_HandleStopToken<Receiver, Operation_ReadSome> _cancel_impl{};
+
+    void try_stop() noexcept { Helper_CanceloEx(_socket, _ov.ptr()); }
 
     static void on_received(void* user_data, const wi::PortEntry& entry, std::error_code ec) noexcept
     {
@@ -497,6 +536,11 @@ struct Operation_ReadSome : Operation_Base
         assert(entry.completion_key == kClientKeyIOCP);
         assert(entry.overlapped == self._ov.ptr());
 
+        if (self._cancel_impl.try_finalize(self._receiver))
+        {
+            unifex::set_done(std::move(self._receiver));
+            return;
+        }
         if (ec)
         {
             unifex::set_error(std::move(self._receiver), ec);
@@ -518,6 +562,8 @@ struct Operation_ReadSome : Operation_Base
 
     void start() & noexcept
     {
+        _cancel_impl.try_construct(_receiver, *this);
+
         auto buffers = _buffers.as_ref();
         _flags = MSG_PARTIAL;
         DWORD received = 0;
@@ -1298,8 +1344,7 @@ private:
     }
 };
 
-template<typename Receiver
-    , typename StopToken = unifex::stop_token_type_t<Receiver>>
+template<typename Receiver>
 struct Operation_Resolve : Operation_Base
 {
     struct AddrInfo_Overlapped : WSAOVERLAPPED
@@ -1308,13 +1353,6 @@ struct Operation_Resolve : Operation_Base
         Callback _callback = nullptr;
         Operation_Resolve* _self = nullptr;
     };
-
-    struct Callback_Stop
-    {
-        Operation_Resolve* _self = nullptr;
-        void operator()() noexcept { _self->try_stop(); }
-    };
-    using StopCallback = typename StopToken::template callback_type<Callback_Stop>;
 
     Receiver _receiver;
     wi::IoCompletionPort* _iocp = nullptr;
@@ -1326,7 +1364,7 @@ struct Operation_Resolve : Operation_Base
     PADDRINFOEXW _results = nullptr;
     AddrInfo_Overlapped _ov{{}, &Operation_Resolve::on_complete_WindowsThread, this};
     IOCP_Overlapped _iocp_ov{{}, &Operation_Resolve::on_addrinfo_finish, this};
-    unifex::manual_lifetime<StopCallback> _stop_callback{};
+    Helper_HandleStopToken<Receiver, Operation_Resolve> _cancel_impl{};
     HANDLE _cancel_handle = INVALID_HANDLE_VALUE;
     // Points to `_cancel_handle` when cancel is available.
     std::atomic<HANDLE*> _atomic_stop{};
@@ -1335,22 +1373,14 @@ struct Operation_Resolve : Operation_Base
     {
         Operation_Resolve* self = static_cast<Operation_Resolve*>(user_data);
 
-        if constexpr (!unifex::is_stop_never_possible_v<StopToken>)
+        if (self->_cancel_impl.try_finalize(self->_receiver))
         {
             // #XXX: There is race if someone asks to stop now.
             self->_cancel_handle = nullptr; // Invalid now.
             self->_atomic_stop = nullptr;
-            self->_stop_callback.destruct();
-
-            auto stop_token = unifex::get_stop_token(self->_receiver);
-            if (stop_token.stop_requested())
-            {
-                // set_done() even if we happened to succeed.
-                unifex::set_done(std::move(self->_receiver));
-                return;
-            }
+            unifex::set_done(std::move(self->_receiver));
+            return;
         }
-
         if (ec)
         {
             unifex::set_error(std::move(self->_receiver), ec);
@@ -1364,6 +1394,7 @@ struct Operation_Resolve : Operation_Base
                 , std::error_code(int(error), std::system_category()));
             return;
         }
+
         unifex::set_value(std::move(self->_receiver)
             , EndpointsList_IPv4{self->_results});
     }
@@ -1437,15 +1468,11 @@ struct Operation_Resolve : Operation_Base
             }
         }
 
-        // Don't even alloc (?) cancel handle if not stoppable.
-        auto stop_token = unifex::get_stop_token(_receiver);
-        HANDLE* cancel_ptr = (stop_token.stop_possible() ? &_cancel_handle : nullptr);
-
-        if constexpr (!unifex::is_stop_never_possible_v<StopToken>)
+        HANDLE* cancel_ptr = nullptr;
+        if (_cancel_impl.try_construct(_receiver, *this))
         {
-            _stop_callback.construct(stop_token, Callback_Stop{this});
+            cancel_ptr = &_cancel_handle;
         }
-
         ADDRINFOEXW hints{};
         hints.ai_family = AF_INET;
         hints.ai_socktype = SOCK_STREAM;
@@ -1480,16 +1507,13 @@ struct Operation_Resolve : Operation_Base
             return;
         }
 
-        if constexpr (!unifex::is_stop_never_possible_v<StopToken>)
+        // #XXX: there is race between doing a call to ::GetAddrInfoExW()
+        // - creating `_cancel_handle` - and stop request from
+        // stop source. In this case we have to way to actually interrupt
+        // ::GetAddrInfoExW() and will simply fail to stop.
+        if (cancel_ptr)
         {
-            // #XXX: there is race between doing a call to ::GetAddrInfoExW()
-            // - creating `_cancel_handle` - and stop request from
-            // stop source. In this case we have to way to actually interrupt
-            // ::GetAddrInfoExW() and will simply fail to stop.
-            if (cancel_ptr)
-            {
-                _atomic_stop = cancel_ptr;
-            }
+            _atomic_stop = cancel_ptr;
         }
     }
 };
@@ -1519,6 +1543,7 @@ inline Sender_Resolve async_resolve(wi::IoCompletionPort& iocp
     return Sender_Resolve{{}, &iocp, host_name, service_name_or_port};
 }
 
+// #XXX: seems like this can be implemented in terms of existing algos.
 template<typename Receiver, typename EndpointsRange>
 struct Operation_RangeConnect : Operation_Base
 {
