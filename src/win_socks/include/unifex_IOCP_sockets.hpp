@@ -334,12 +334,86 @@ struct Sender_Connect : Sender_LogSimple<void, std::error_code>
     }
 };
 
+struct BufferRef : WSABUF
+{
+    explicit BufferRef()
+        : WSABUF{0, nullptr} {}
+    explicit BufferRef(void* data, std::uint32_t size)
+        : WSABUF{ULONG(size), static_cast<CHAR*>(data)} {}
+};
+
+// Helper to support passing only single std::span<bytes> buffer
+// OR multiple std::span<BufferRef> buffers.
+// std::span<bytes> needs to be converted to std::span<BufferRef>
+// (with buffers count = 1) and that temporary buffer needs to be
+// alive until connect() - or ::WSASend() - call.
+// 
+// Logically, same as std::variant<std::span<char>, std::span<BufferRef>>,
+// but simpler - better for compile times & codegen.
+struct OneBufferOwnerOrManyRef
+{
+    BufferRef _single_buffer;
+    std::optional<std::span<BufferRef>> _buffers;
+    std::optional<std::size_t> _total_size;
+
+    explicit OneBufferOwnerOrManyRef(BufferRef single_buffer)
+        : _single_buffer(single_buffer)
+        , _buffers(std::nullopt)
+        , _total_size(std::in_place, single_buffer.len) {}
+    explicit OneBufferOwnerOrManyRef(std::span<BufferRef> buffers)
+        : _single_buffer()
+        , _buffers(std::in_place, buffers)
+        , _total_size(std::nullopt) {}
+    // Pre-calculated total size of all buffers.
+    explicit OneBufferOwnerOrManyRef(std::span<BufferRef> buffers, std::size_t total_size)
+        : _single_buffer()
+        , _buffers(std::in_place, buffers)
+        , _total_size(std::in_place, total_size) {}
+
+    std::span<BufferRef> as_ref()
+    {
+        return _buffers.value_or(std::span<BufferRef>(&_single_buffer, 1));
+    }
+
+    bool has_data() const
+    {
+        if (_total_size.has_value())
+        {
+            return (*_total_size > 0);
+        }
+        assert(_buffers.has_value());
+        for (const BufferRef& buffer : *_buffers)
+        {
+            if (buffer.len > 0)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    std::size_t total_size()
+    {
+        if (!_total_size.has_value())
+        {
+            assert(_buffers.has_value());
+            std::size_t value = 0;
+            for (const BufferRef& buffer : *_buffers)
+            {
+                value += buffer.len;
+            }
+            _total_size.emplace(value);
+        }
+        return *_total_size;
+    }
+};
+
 template<typename Receiver>
 struct Operation_WriteSome : Operation_Base
 {
     Receiver _receiver;
     SOCKET _socket = INVALID_SOCKET;
-    std::span<char> _data;
+    OneBufferOwnerOrManyRef _buffers;
     IOCP_Overlapped _ov{{}, &Operation_WriteSome::on_sent, this};
 
     static void on_sent(void* user_data, const wi::PortEntry& entry, std::error_code ec) noexcept
@@ -361,14 +435,11 @@ struct Operation_WriteSome : Operation_Base
 
     void start() & noexcept
     {
-        assert(_data.size() <= (std::numeric_limits<ULONG>::max)());
-
-        WSABUF send_buffer{};
-        send_buffer.buf = _data.data();
-        send_buffer.len = ULONG(_data.size());
+        auto buffers = _buffers.as_ref();
+        DWORD bytes_sent = 0;
         const int error = ::WSASend(_socket
-            , &send_buffer, 1
-            , nullptr/*bytes_send*/
+            , buffers.data(), DWORD(buffers.size())
+            , &bytes_sent
             , 0/*flags*/
             , _ov.ptr()
             , nullptr);
@@ -376,7 +447,7 @@ struct Operation_WriteSome : Operation_Base
         {
             // Completed synchronously.
             wi::PortEntry entry;
-            entry.bytes_transferred = wi::WinDWORD(_data.size());
+            entry.bytes_transferred = bytes_sent;
             entry.completion_key = kClientKeyIOCP;
             entry.overlapped = _ov.ptr();
             on_sent(this, entry, std::error_code());
@@ -399,13 +470,13 @@ struct Operation_WriteSome : Operation_Base
 struct Sender_WriteSome : Sender_LogSimple<std::size_t, std::error_code>
 {
     SOCKET _socket = INVALID_SOCKET;
-    std::span<char> _data;
+    OneBufferOwnerOrManyRef _buffers;
 
     template <typename Receiver>
     auto connect(Receiver&& receiver) && noexcept
     {
         using Receiver_ = std::remove_cvref_t<Receiver>;
-        return Operation_WriteSome<Receiver_>{{}, std::move(receiver), _socket, _data};
+        return Operation_WriteSome<Receiver_>{{}, std::move(receiver), _socket, _buffers};
     }
 };
 
@@ -414,7 +485,7 @@ struct Operation_ReadSome : Operation_Base
 {
     Receiver _receiver;
     SOCKET _socket = INVALID_SOCKET;
-    std::span<char> _buffer;
+    OneBufferOwnerOrManyRef _buffers;
     IOCP_Overlapped _ov{{}, &Operation_ReadSome::on_received, this};
     DWORD _flags = 0;
     WSABUF _wsa_buf{};
@@ -434,7 +505,7 @@ struct Operation_ReadSome : Operation_Base
 
         // Match to Asio behavior, complete_iocp_recv(), socket_ops.ipp.
         if ((entry.bytes_transferred == 0)
-            && (self._buffer.size() != 0))
+            && self._buffers.has_data())
         {
             unifex::set_error(std::move(self._receiver)
                 , std::error_code(-1, std::system_category()));
@@ -447,13 +518,11 @@ struct Operation_ReadSome : Operation_Base
 
     void start() & noexcept
     {
-        WSABUF receive_buffer{};
-        receive_buffer.buf = _buffer.data();
-        receive_buffer.len = ULONG(_buffer.size());
+        auto buffers = _buffers.as_ref();
         _flags = MSG_PARTIAL;
         DWORD received = 0;
         const int error = ::WSARecv(_socket
-            , &receive_buffer, 1
+            , buffers.data(), DWORD(buffers.size())
             , &received
             , &_flags
             , _ov.ptr()
@@ -485,19 +554,19 @@ struct Operation_ReadSome : Operation_Base
 struct Sender_ReadSome : Sender_LogSimple<std::size_t, std::error_code>
 {
     SOCKET _socket;
-    std::span<char> _buffer;
+    OneBufferOwnerOrManyRef _buffers;
 
     template<typename Receiver>
     auto connect(Receiver&& receiver) && noexcept
     {
         using Receiver_ = std::remove_cvref_t<Receiver>;
-        return Operation_ReadSome<Receiver_>{{}, std::move(receiver), _socket, _buffer};
+        return Operation_ReadSome<Receiver_>{{}, std::move(receiver), _socket, _buffers};
     }
 };
 
 template<typename Receiver
     , typename _Async_TCPSocket /*= Async_TCPSocket*/>
-    struct Operation_Accept : Operation_Base
+struct Operation_Accept : Operation_Base
 {
     // As per AcceptEx() and GetAcceptExSockaddrs():
     // https://docs.microsoft.com/en-us/windows/win32/api/mswsock/nf-mswsock-acceptex
@@ -600,14 +669,6 @@ struct Sender_Accept : Sender_LogSimple<_Async_TCPSocket, std::error_code>
         using Receiver_ = std::remove_cvref_t<Receiver>;
         return Operation_Accept<Receiver_, _Async_TCPSocket>{{}, std::move(receiver), _listen_socket, _iocp};
     }
-};
-
-struct BufferRef : WSABUF
-{
-    explicit BufferRef()
-        : WSABUF{0, nullptr} {}
-    explicit BufferRef(std::uint32_t size, void* data)
-        : WSABUF{ULONG(size), static_cast<CHAR*>(data)} {}
 };
 
 struct Async_TCPSocket
@@ -713,24 +774,28 @@ struct Async_TCPSocket
     // See also async_write().
     Sender_WriteSome async_write_some(std::span<char> data) noexcept
     {
-        return Sender_WriteSome{{}, _socket, data};
+        assert(data.size() <= (std::numeric_limits<std::uint32_t>::max)());
+        OneBufferOwnerOrManyRef buffer(BufferRef(data.data(), std::uint32_t(data.size())));
+        return Sender_WriteSome{{}, _socket, buffer};
     }
     Sender_WriteSome async_write_some(std::span<BufferRef> many_buffers) noexcept
     {
-        (void)many_buffers;
-        return Sender_WriteSome{{}, _socket, std::span<char>()};
+        OneBufferOwnerOrManyRef buffers(many_buffers);
+        return Sender_WriteSome{{}, _socket, buffers};
     }
 
     // https://www.boost.org/doc/libs/1_77_0/doc/html/boost_asio/reference/basic_stream_socket/async_read_some.html.
     // See also async_read().
-    Sender_ReadSome async_read_some(std::span<char> buffer) noexcept
+    Sender_ReadSome async_read_some(std::span<char> data) noexcept
     {
+        assert(data.size() <= (std::numeric_limits<std::uint32_t>::max)());
+        OneBufferOwnerOrManyRef buffer(BufferRef(data.data(), std::uint32_t(data.size())));
         return Sender_ReadSome{{}, _socket, buffer};
     }
     Sender_ReadSome async_read_some(std::span<BufferRef> many_buffers) noexcept
     {
-        (void)many_buffers;
-        return Sender_ReadSome{{}, _socket, std::span<char>()};
+        OneBufferOwnerOrManyRef buffers(many_buffers);
+        return Sender_ReadSome{{}, _socket, buffers};
     }
 
     ~Async_TCPSocket() noexcept
@@ -981,112 +1046,167 @@ struct SelectOnceInN_Scheduler
 static_assert(unifex::scheduler<SelectOnceInN_Scheduler<unifex::inline_scheduler>>);
 static_assert(unifex::scheduler<SelectOnceInN_Scheduler<IOCP_Scheduler>>);
 
-inline auto async_read(Async_TCPSocket& tcp_socket, std::span<char> data) noexcept
+struct State_AsyncReadWrite
 {
-    struct State
-    {
-        Async_TCPSocket& _socket;
-        std::span<char> _data{};
-        std::size_t _read_bytes = 0;
-        unsigned _calls_count = 0;
+    Async_TCPSocket* _socket;
+    OneBufferOwnerOrManyRef _buffers_impl;
+    std::span<BufferRef> _buffers;
+    std::size_t _processed_bytes;
+    BufferRef* _current_buffer;
+    unsigned _calls_count;
 
-        auto scheduler()
+    explicit State_AsyncReadWrite(Async_TCPSocket& socket, OneBufferOwnerOrManyRef buffers_impl)
+        : _socket(&socket)
+        , _buffers_impl(buffers_impl)
+        , _buffers(_buffers_impl.as_ref())
+        , _processed_bytes(0)
+        , _current_buffer(_buffers.data())
+        , _calls_count(0) { }
+    // Needed for unifex::let_value(). Fix self-referencing pointers.
+    State_AsyncReadWrite(State_AsyncReadWrite&& rhs)
+        : _socket(rhs._socket)
+        , _buffers_impl(rhs._buffers_impl)
+        , _buffers(_buffers_impl.as_ref())
+        , _processed_bytes(0)
+        , _current_buffer(_buffers.data())
+        , _calls_count(0) { }
+
+    State_AsyncReadWrite(const State_AsyncReadWrite&) = delete;
+    State_AsyncReadWrite& operator=(const State_AsyncReadWrite&) = delete;
+    State_AsyncReadWrite& operator=(State_AsyncReadWrite&&) = delete;
+
+    auto scheduler()
+    {
+        return SelectOnceInN_Scheduler<IOCP_Scheduler>{
+            IOCP_Scheduler{_socket->_iocp}, & _calls_count, 128};
+    }
+
+    std::span<BufferRef> remaining() const
+    {
+        BufferRef* const end = (_buffers.data() + _buffers.size());
+        return std::span<BufferRef>(_current_buffer, end);
+    }
+
+    void consume(std::size_t bytes_transferred)
+    {
+        _processed_bytes += bytes_transferred;
+        if (_processed_bytes >= _buffers_impl.total_size())
         {
-            // Schedule once in 128 calls into IOCP, otherwise inline_sheduler.
-            return SelectOnceInN_Scheduler<IOCP_Scheduler>{
-                IOCP_Scheduler{_socket._iocp}, &_calls_count, 128};
+            // Done.
+            BufferRef* const end = (_buffers.data() + _buffers.size());
+            _current_buffer = end;
+            return;
         }
-    };
 
-    return unifex::let_value(unifex::just(State{tcp_socket, data, 0, 0})
-        , [](State& state)
+        BufferRef* const end = (_buffers.data() + _buffers.size());
+        for (; _current_buffer != end; ++_current_buffer)
+        {
+            if (_current_buffer->len <= bytes_transferred)
+            {
+                // Consumed this buffer.
+                bytes_transferred -= _current_buffer->len;
+                continue;
+            }
+            // else: buffer->len > bytes_transferred
+            // Consumed part of this buffer.
+            _current_buffer->buf = (static_cast<CHAR*>(_current_buffer->buf) + bytes_transferred);
+            _current_buffer->len -= bytes_transferred;
+            break;
+        }
+        assert(_current_buffer != end);
+    }
+
+    bool is_completed()
     {
-        return unifex::repeat_effect_until(
-            unifex::defer([&state]()
-            {
-                assert(state._read_bytes < state._data.size());
-                const std::size_t remaining = (state._data.size() - state._read_bytes);
-                return unifex::on(state.scheduler(),
-                    state._socket.async_read_some(state._data.last(remaining))
-                        | unifex::then([&state](std::size_t bytes_transferred)
-                    {
-                        state._read_bytes += bytes_transferred;
-                    }));
-            })
-            , [&state]()
-            {
-                return (state._read_bytes >= state._data.size());
-            })
-                | unifex::then([&state]()
-            {
-#if (0)
-                printf("Read %zu bytes with %u calls.\n", state._read_bytes, state._recursion_counter);
-#endif
-                return state._read_bytes;
-            });
+        return (_processed_bytes >= _buffers_impl.total_size());
+    }
+
+    static auto do_write(Async_TCPSocket& tcp_socket, std::span<BufferRef> many_buffers)
+    {
+        return tcp_socket.async_write_some(many_buffers);
+    }
+    static auto do_read(Async_TCPSocket& tcp_socket, std::span<BufferRef> many_buffers)
+    {
+        return tcp_socket.async_read_some(many_buffers);
+    }
+};
+
+template<typename ReadOrWriteSome>
+inline auto async_read_write_impl(Async_TCPSocket& tcp_socket
+    , OneBufferOwnerOrManyRef buffers_impl
+    , ReadOrWriteSome callback) noexcept
+{
+    return unifex::let_value(unifex::just(State_AsyncReadWrite{tcp_socket, buffers_impl})
+        , [callback = std::move(callback)](State_AsyncReadWrite& state) mutable
+    {
+        return unifex::repeat_effect_until(unifex::defer([&state, callback = std::move(callback)]()
+        {
+            return unifex::on(state.scheduler(),
+                callback(*state._socket, state.remaining())
+                    | unifex::then([&state](std::size_t bytes_transferred)
+                {
+                    state.consume(bytes_transferred);
+                }));
+        })
+        , [&state]()
+        {
+            return state.is_completed();
+        })
+            | unifex::then([&state]()
+        {
+            return state._processed_bytes;
+        });
     });
 }
 
-inline auto async_read(Async_TCPSocket& tcp_socket
-    // `many_buffers` must be alive for a duration of the call.
-    , std::span<BufferRef> many_buffers)
-{
-    (void)tcp_socket;
-    (void)many_buffers;
-}
-
-// Same as async_read().
 inline auto async_write(Async_TCPSocket& tcp_socket, std::span<char> data) noexcept
 {
-    struct State
-    {
-        Async_TCPSocket& _socket;
-        std::span<char> _data{};
-        std::size_t _written_bytes = 0;
-        unsigned _calls_count = 0;
-
-        auto scheduler()
-        {
-            return SelectOnceInN_Scheduler<IOCP_Scheduler>{
-                IOCP_Scheduler{_socket._iocp}, &_calls_count, 128};
-        }
-    };
-
-    return unifex::let_value(unifex::just(State{tcp_socket, data, 0, 0})
-        , [](State& state)
-    {
-        return unifex::repeat_effect_until(
-            unifex::defer([&state]()
-            {
-                assert(state._written_bytes <= state._data.size());
-                const std::size_t remaining = (state._data.size() - state._written_bytes);
-                return unifex::on(state.scheduler(),
-                    state._socket.async_write_some(state._data.last(remaining))
-                        | unifex::then([&state](std::size_t bytes_transferred)
-                    {
-                        state._written_bytes += bytes_transferred;
-                    }));
-            })
-            , [&state]()
-            {
-                return (state._written_bytes >= state._data.size());
-            })
-                | unifex::then([&state]()
-            {
-#if (0)
-                printf("Wrote %zu bytes with %u calls.\n", state._written_bytes, state._recursion_counter);
-#endif
-                return state._written_bytes;
-            });
-    });
+    assert(data.size() <= (std::numeric_limits<std::uint32_t>::max)());
+    OneBufferOwnerOrManyRef buffer(BufferRef(data.data(), std::uint32_t(data.size())));
+    return async_read_write_impl(tcp_socket, buffer, &State_AsyncReadWrite::do_write);
 }
 
 inline auto async_write(Async_TCPSocket& tcp_socket
     // `many_buffers` must be alive for a duration of the call.
     , std::span<BufferRef> many_buffers)
 {
-    (void)tcp_socket;
-    (void)many_buffers;
+    OneBufferOwnerOrManyRef buffers(many_buffers);
+    return async_read_write_impl(tcp_socket, buffers, &State_AsyncReadWrite::do_write);
+}
+
+inline auto async_write(Async_TCPSocket& tcp_socket
+    // `many_buffers` must be alive for a duration of the call.
+    , std::span<BufferRef> many_buffers
+    // pre-calculated total size of `many_buffers`.
+    , std::size_t total_size)
+{
+    OneBufferOwnerOrManyRef buffers(many_buffers, total_size);
+    return async_read_write_impl(tcp_socket, buffers, &State_AsyncReadWrite::do_write);
+}
+
+inline auto async_read(Async_TCPSocket& tcp_socket, std::span<char> data) noexcept
+{
+    assert(data.size() <= (std::numeric_limits<std::uint32_t>::max)());
+    OneBufferOwnerOrManyRef buffer(BufferRef(data.data(), std::uint32_t(data.size())));
+    return async_read_write_impl(tcp_socket, buffer, &State_AsyncReadWrite::do_read);
+}
+
+inline auto async_read(Async_TCPSocket& tcp_socket
+    // `many_buffers` must be alive for a duration of the call.
+    , std::span<BufferRef> many_buffers)
+{
+    OneBufferOwnerOrManyRef buffers(many_buffers);
+    return async_read_write_impl(tcp_socket, buffers, &State_AsyncReadWrite::do_read);
+}
+
+inline auto async_read(Async_TCPSocket& tcp_socket
+    // `many_buffers` must be alive for a duration of the call.
+    , std::span<BufferRef> many_buffers
+    // pre-calculated total size of `many_buffers`.
+    , std::size_t total_size)
+{
+    OneBufferOwnerOrManyRef buffers(many_buffers, total_size);
+    return async_read_write_impl(tcp_socket, buffers, &State_AsyncReadWrite::do_read);
 }
 
 struct EndpointsList_IPv4
