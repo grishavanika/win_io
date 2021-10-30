@@ -1110,7 +1110,7 @@ struct State_AsyncReadWrite
             // else: buffer->len > bytes_transferred
             // Consumed part of this buffer.
             _current_buffer->buf = (static_cast<CHAR*>(_current_buffer->buf) + bytes_transferred);
-            _current_buffer->len -= bytes_transferred;
+            _current_buffer->len -= ULONG(bytes_transferred);
             break;
         }
         assert(_current_buffer != end);
@@ -1148,7 +1148,7 @@ inline auto async_read_write_impl(Async_TCPSocket& tcp_socket
                     state.consume(bytes_transferred);
                 }));
         })
-        , [&state]()
+            , [&state]()
         {
             return state.is_completed();
         })
