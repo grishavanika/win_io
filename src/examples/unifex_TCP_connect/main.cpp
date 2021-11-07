@@ -20,7 +20,7 @@ int main()
 
     auto test_logic = [&]()
     {
-        return unifex::let_value(stop_with(stop_source, async_resolve(*iocp, "www.google.com", "80"))
+        return unifex::let_value(stop_with(stop_source, async_resolve(*iocp, Resolve_Hint::TCP(), "www.google.com", "80"))
             , [&](EndpointsList_IPv4& endpoints)
         {
             return async_connect(*client, std::move(endpoints));

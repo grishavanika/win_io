@@ -227,7 +227,7 @@ struct Helper_HandleStopToken
     }
 };
 
-inline void Helper_CanceloEx(SOCKET socket, OVERLAPPED* ov)
+inline void Helper_CancelIoEx(SOCKET socket, OVERLAPPED* ov)
 {
     HANDLE handle = reinterpret_cast<HANDLE>(socket);
     const BOOL ok = ::CancelIoEx(handle, ov);
@@ -248,7 +248,7 @@ struct Operation_Connect : Operation_Base
     IOCP_Overlapped _ov{{}, &Operation_Connect::on_connected, this};
     Helper_HandleStopToken<Receiver, Operation_Connect> _cancel_impl{};
 
-    void try_stop() noexcept { Helper_CanceloEx(_socket, _ov.ptr()); }
+    void try_stop() noexcept { Helper_CancelIoEx(_socket, _ov.ptr()); }
 
     static void on_connected(void* user_data, const wi::PortEntry& entry, std::error_code ec) noexcept
     {
@@ -443,7 +443,7 @@ struct Operation_WriteSome : Operation_Base
     IOCP_Overlapped _ov{{}, &Operation_WriteSome::on_sent, this};
     Helper_HandleStopToken<Receiver, Operation_WriteSome> _cancel_impl{};
 
-    void try_stop() noexcept { Helper_CanceloEx(_socket, _ov.ptr()); }
+    void try_stop() noexcept { Helper_CancelIoEx(_socket, _ov.ptr()); }
 
     static void on_sent(void* user_data, const wi::PortEntry& entry, std::error_code ec) noexcept
     {
@@ -517,6 +517,95 @@ struct Sender_WriteSome : Sender_LogSimple<std::size_t, std::error_code>
 };
 
 template<typename Receiver>
+struct Operation_SendTo : Operation_Base
+{
+    Receiver _receiver;
+    SOCKET _socket = INVALID_SOCKET;
+    OneBufferOwnerOrManyRef _buffers;
+    Endpoint_IPv4 _destination;
+    IOCP_Overlapped _ov{{}, &Operation_SendTo::on_sent_to, this};
+    Helper_HandleStopToken<Receiver, Operation_SendTo> _cancel_impl{};
+
+    void try_stop() noexcept { Helper_CancelIoEx(_socket, _ov.ptr()); }
+
+    static void on_sent_to(void* user_data, const wi::PortEntry& entry, std::error_code ec) noexcept
+    {
+        assert(user_data);
+        Operation_SendTo& self = *static_cast<Operation_SendTo*>(user_data);
+        assert(entry.completion_key == kClientKeyIOCP);
+        assert(entry.overlapped == self._ov.ptr());
+
+        if (self._cancel_impl.try_finalize(self._receiver))
+        {
+            unifex::set_done(std::move(self._receiver));
+            return;
+        }
+        if (ec)
+        {
+            unifex::set_error(std::move(self._receiver), ec);
+            return;
+        }
+
+        unifex::set_value(std::move(self._receiver)
+            , std::size_t(entry.bytes_transferred));
+    }
+
+    void start() & noexcept
+    {
+        _cancel_impl.try_construct(_receiver, *this);
+
+        auto buffers = _buffers.as_ref();
+        struct sockaddr_in send_to{};
+        send_to.sin_family = AF_INET;
+        send_to.sin_port = _destination._port_network;
+        send_to.sin_addr.s_addr = _destination._ip_network;
+        DWORD bytes_sent = 0;
+        const int error = ::WSASendTo(_socket
+            , buffers.data(), DWORD(buffers.size())
+            , &bytes_sent
+            , 0/*flags*/
+            , reinterpret_cast<struct sockaddr*>(&send_to), sizeof(send_to)
+            , _ov.ptr()
+            , nullptr);
+        if (error == 0)
+        {
+            // Completed synchronously.
+            wi::PortEntry entry;
+            entry.bytes_transferred = bytes_sent;
+            entry.completion_key = kClientKeyIOCP;
+            entry.overlapped = _ov.ptr();
+            on_sent_to(this, entry, std::error_code());
+            return;
+        }
+        const int wsa_error = ::WSAGetLastError();
+        if (wsa_error != ERROR_IO_PENDING)
+        {
+            wi::PortEntry entry;
+            entry.bytes_transferred = 0;
+            entry.completion_key = kClientKeyIOCP;
+            entry.overlapped = _ov.ptr();
+            on_sent_to(this, entry
+                , std::error_code(wsa_error, std::system_category()));
+            return;
+        }
+    }
+};
+
+struct Sender_SendTo : Sender_LogSimple<std::size_t, std::error_code>
+{
+    SOCKET _socket = INVALID_SOCKET;
+    OneBufferOwnerOrManyRef _buffers;
+    Endpoint_IPv4 _destination;
+
+    template <typename Receiver>
+    auto connect(Receiver&& receiver) && noexcept
+    {
+        using Receiver_ = std::remove_cvref_t<Receiver>;
+        return Operation_SendTo<Receiver_>{{}, std::move(receiver), _socket, _buffers, _destination};
+    }
+};
+
+template<typename Receiver>
 struct Operation_ReadSome : Operation_Base
 {
     Receiver _receiver;
@@ -527,7 +616,7 @@ struct Operation_ReadSome : Operation_Base
     WSABUF _wsa_buf{};
     Helper_HandleStopToken<Receiver, Operation_ReadSome> _cancel_impl{};
 
-    void try_stop() noexcept { Helper_CanceloEx(_socket, _ov.ptr()); }
+    void try_stop() noexcept { Helper_CancelIoEx(_socket, _ov.ptr()); }
 
     static void on_received(void* user_data, const wi::PortEntry& entry, std::error_code ec) noexcept
     {
@@ -607,6 +696,101 @@ struct Sender_ReadSome : Sender_LogSimple<std::size_t, std::error_code>
     {
         using Receiver_ = std::remove_cvref_t<Receiver>;
         return Operation_ReadSome<Receiver_>{{}, std::move(receiver), _socket, _buffers};
+    }
+};
+
+template<typename Receiver>
+struct Operation_ReceiveFrom : Operation_Base
+{
+    Receiver _receiver;
+    SOCKET _socket = INVALID_SOCKET;
+    OneBufferOwnerOrManyRef _buffers;
+    Endpoint_IPv4* _sender = nullptr;
+    IOCP_Overlapped _ov{{}, &Operation_ReceiveFrom::on_received_from, this};
+    DWORD _flags = 0;
+    struct sockaddr_in _received_from{};
+    INT _endpoint_length = 0;
+    WSABUF _wsa_buf{};
+    Helper_HandleStopToken<Receiver, Operation_ReceiveFrom> _cancel_impl{};
+
+    void try_stop() noexcept { Helper_CancelIoEx(_socket, _ov.ptr()); }
+
+    static void on_received_from(void* user_data, const wi::PortEntry& entry, std::error_code ec) noexcept
+    {
+        assert(user_data);
+        Operation_ReceiveFrom& self = *static_cast<Operation_ReceiveFrom*>(user_data);
+        assert(entry.completion_key == kClientKeyIOCP);
+        assert(entry.overlapped == self._ov.ptr());
+
+        if (self._cancel_impl.try_finalize(self._receiver))
+        {
+            unifex::set_done(std::move(self._receiver));
+            return;
+        }
+        if (ec)
+        {
+            unifex::set_error(std::move(self._receiver), ec);
+            return;
+        }
+
+        assert(self._endpoint_length == sizeof(struct sockaddr_in));
+        self._sender->_port_network = self._received_from.sin_port;
+        self._sender->_ip_network = self._received_from.sin_addr.s_addr;
+
+        unifex::set_value(std::move(self._receiver)
+            , std::size_t(entry.bytes_transferred));
+    }
+
+    void start() & noexcept
+    {
+        _cancel_impl.try_construct(_receiver, *this);
+
+        auto buffers = _buffers.as_ref();
+        _flags = MSG_PARTIAL;
+        DWORD received = 0;
+        _endpoint_length = sizeof(struct sockaddr_in);
+        const int error = ::WSARecvFrom(_socket
+            , buffers.data(), DWORD(buffers.size())
+            , &received
+            , &_flags
+            , reinterpret_cast<struct sockaddr*>(&_received_from), &_endpoint_length
+            , _ov.ptr()
+            , nullptr);
+        if (error == 0)
+        {
+            // Completed synchronously.
+            wi::PortEntry entry;
+            entry.bytes_transferred = received;
+            entry.completion_key = kClientKeyIOCP;
+            entry.overlapped = _ov.ptr();
+            on_received_from(this, entry, std::error_code());
+            return;
+        }
+        const int wsa_error = ::WSAGetLastError();
+        if (wsa_error != ERROR_IO_PENDING)
+        {
+            wi::PortEntry entry;
+            entry.bytes_transferred = 0;
+            entry.completion_key = kClientKeyIOCP;
+            entry.overlapped = _ov.ptr();
+            on_received_from(this, entry
+                , std::error_code(wsa_error, std::system_category()));
+            return;
+        }
+    }
+};
+
+struct Sender_ReceiveFrom : Sender_LogSimple<std::size_t, std::error_code>
+{
+    SOCKET _socket;
+    OneBufferOwnerOrManyRef _buffers;
+    Endpoint_IPv4* _sender = nullptr;
+
+    template<typename Receiver>
+    auto connect(Receiver&& receiver) && noexcept
+    {
+        using Receiver_ = std::remove_cvref_t<Receiver>;
+        return Operation_ReceiveFrom<Receiver_>{{}, std::move(receiver), _socket, _buffers, _sender};
     }
 };
 
@@ -887,6 +1071,154 @@ private:
     {
     }
 };
+
+struct Async_UDPSocket
+{
+    SOCKET _socket = INVALID_SOCKET;
+    wi::IoCompletionPort* _iocp = nullptr;
+
+    explicit Async_UDPSocket() noexcept = default;
+
+    static std::optional<Async_UDPSocket> make(wi::IoCompletionPort& iocp, std::error_code& ec) noexcept
+    {
+        ec = std::error_code();
+        WSAPROTOCOL_INFOW* default_protocol = nullptr;
+        GROUP no_group = 0;
+        SOCKET handle = ::WSASocketW(AF_INET
+            , SOCK_DGRAM
+            , IPPROTO_UDP
+            , default_protocol
+            , no_group
+            , WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
+        Async_UDPSocket socket(handle, iocp);
+        if (handle == INVALID_SOCKET)
+        {
+            ec = std::error_code(::WSAGetLastError(), std::system_category());
+            return std::nullopt;
+        }
+
+        const BOOL ok = ::SetFileCompletionNotificationModes(HANDLE(handle)
+            , FILE_SKIP_SET_EVENT_ON_HANDLE
+            | FILE_SKIP_COMPLETION_PORT_ON_SUCCESS);
+        if (!ok)
+        {
+            ec = std::error_code(::GetLastError(), std::system_category());
+            return std::nullopt;
+        }
+
+        u_long flags = 1; // non-blocking, enable.
+        const int error = ::ioctlsocket(handle, FIONBIO, &flags);
+        if (error)
+        {
+            ec = std::error_code(::WSAGetLastError(), std::system_category());
+            return std::nullopt;
+        }
+
+        iocp.associate_socket(wi::WinSOCKET(handle), kClientKeyIOCP, ec);
+        if (ec)
+        {
+            return std::nullopt;
+        }
+        return std::make_optional(std::move(socket));
+    }
+
+    void bind(Endpoint_IPv4 bind_on // Endpoint_IPv4::from_port(...)
+        , std::error_code& ec, bool reuse = true)
+    {
+        if (reuse)
+        {
+            int enable_reuse = 1;
+            const int error = ::setsockopt(_socket
+                , SOL_SOCKET
+                , SO_REUSEADDR
+                , reinterpret_cast<char*>(&enable_reuse), sizeof(enable_reuse));
+            if (error != 0)
+            {
+                ec = std::error_code(::WSAGetLastError(), std::system_category());
+                return;
+            }
+        }
+
+        struct sockaddr_in address {};
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = bind_on._ip_network;
+        address.sin_port = bind_on._port_network;
+        int error = ::bind(_socket
+            , reinterpret_cast<SOCKADDR*>(&address)
+            , sizeof(address));
+        if (error != 0)
+        {
+            ec = std::error_code(::WSAGetLastError(), std::system_category());
+            return;
+        }
+    }
+
+    Sender_SendTo async_send_to(std::span<char> data, const Endpoint_IPv4& destination) noexcept
+    {
+        assert(data.size() <= (std::numeric_limits<std::uint32_t>::max)());
+        OneBufferOwnerOrManyRef buffer(BufferRef(data.data(), std::uint32_t(data.size())));
+        return Sender_SendTo{{}, _socket, buffer, destination};
+    }
+    Sender_SendTo async_send_to(std::span<BufferRef> many_buffers, const Endpoint_IPv4& destination) noexcept
+    {
+        OneBufferOwnerOrManyRef buffers(many_buffers);
+        return Sender_SendTo{{}, _socket, buffers, destination};
+    }
+
+    Sender_ReceiveFrom async_receive_from(std::span<char> data, Endpoint_IPv4& sender) noexcept
+    {
+        assert(data.size() <= (std::numeric_limits<std::uint32_t>::max)());
+        OneBufferOwnerOrManyRef buffer(BufferRef(data.data(), std::uint32_t(data.size())));
+        return Sender_ReceiveFrom{{}, _socket, buffer, &sender};
+    }
+    Sender_ReceiveFrom async_receive_from(std::span<BufferRef> many_buffers, Endpoint_IPv4& sender) noexcept
+    {
+        OneBufferOwnerOrManyRef buffers(many_buffers);
+        return Sender_ReceiveFrom{{}, _socket, buffers, &sender};
+    }
+
+    ~Async_UDPSocket() noexcept
+    {
+        close();
+    }
+
+    void close() noexcept
+    {
+        SOCKET socket = std::exchange(_socket, INVALID_SOCKET);
+        if (socket == INVALID_SOCKET)
+        {
+            return;
+        }
+        const int error = ::closesocket(socket);
+        (void)error;
+        _iocp = nullptr;
+    }
+
+    Async_UDPSocket(const Async_UDPSocket&) = delete;
+    Async_UDPSocket& operator=(const Async_UDPSocket&) = delete;
+    Async_UDPSocket(Async_UDPSocket&& rhs) noexcept
+        : _socket(std::exchange(rhs._socket, INVALID_SOCKET))
+        , _iocp(std::exchange(rhs._iocp, nullptr))
+    {
+    }
+    Async_UDPSocket& operator=(Async_UDPSocket&& rhs) noexcept
+    {
+        if (this != &rhs)
+        {
+            close();
+            _socket = std::exchange(rhs._socket, INVALID_SOCKET);
+            _iocp = std::exchange(rhs._iocp, nullptr);
+        }
+        return *this;
+    }
+private:
+    explicit Async_UDPSocket(SOCKET socket, wi::IoCompletionPort& iocp) noexcept
+        : _socket(socket)
+        , _iocp(&iocp)
+    {
+    }
+};
+
 
 template<typename Receiver>
 struct Operation_IOCP_Schedule : Operation_Base
@@ -1344,6 +1676,28 @@ private:
     }
 };
 
+struct Resolve_Hint
+{
+    int _type = 0;
+    int _protocol = 0;
+
+    static Resolve_Hint TCP()
+    {
+        Resolve_Hint hint;
+        hint._type = SOCK_STREAM;
+        hint._protocol = IPPROTO_TCP;
+        return hint;
+    }
+
+    static Resolve_Hint UDP()
+    {
+        Resolve_Hint hint;
+        hint._type = SOCK_DGRAM;
+        hint._protocol = IPPROTO_UDP;
+        return hint;
+    }
+};
+
 template<typename Receiver>
 struct Operation_Resolve : Operation_Base
 {
@@ -1356,6 +1710,7 @@ struct Operation_Resolve : Operation_Base
 
     Receiver _receiver;
     wi::IoCompletionPort* _iocp = nullptr;
+    Resolve_Hint _hint;
     std::string_view _host_name;
     std::string_view _service_name_or_port;
     // Output.
@@ -1475,8 +1830,8 @@ struct Operation_Resolve : Operation_Base
         }
         ADDRINFOEXW hints{};
         hints.ai_family = AF_INET;
-        hints.ai_socktype = SOCK_STREAM;
-        hints.ai_protocol = IPPROTO_TCP;
+        hints.ai_socktype = _hint._type;
+        hints.ai_protocol = _hint._protocol;
         const INT error = ::GetAddrInfoExW(_whost_name, _wservice_name
             , NS_ALL
             , nullptr // lpNspId
@@ -1521,6 +1876,7 @@ struct Operation_Resolve : Operation_Base
 struct Sender_Resolve : Sender_LogSimple<EndpointsList_IPv4, std::error_code>
 {
     wi::IoCompletionPort* _iocp;
+    Resolve_Hint _hint;
     std::string_view _host_name;
     std::string_view _service_name_or_port;
 
@@ -1529,18 +1885,19 @@ struct Sender_Resolve : Sender_LogSimple<EndpointsList_IPv4, std::error_code>
     {
         using Receiver_ = std::remove_cvref_t<Receiver>;
         return Operation_Resolve<Receiver_>{{}
-            , std::move(receiver), _iocp, _host_name, _service_name_or_port};
+            , std::move(receiver), _iocp, _hint, _host_name, _service_name_or_port};
     }
 };
 
 // IPv4.
 inline Sender_Resolve async_resolve(wi::IoCompletionPort& iocp
+    , Resolve_Hint hint
     , std::string_view host_name
     // Either service name, like "http", see "%WINDIR%\system32\drivers\etc\services" on Windows
     // OR port, like "80".
     , std::string_view service_name_or_port = {})
 {
-    return Sender_Resolve{{}, &iocp, host_name, service_name_or_port};
+    return Sender_Resolve{{}, &iocp, hint, host_name, service_name_or_port};
 }
 
 // #XXX: seems like this can be implemented in terms of existing algos.

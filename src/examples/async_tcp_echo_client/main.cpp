@@ -32,7 +32,7 @@ static auto run_client(Async_TCPSocket& socket
     , std::string_view port
     , std::string_view host_name = "localhost")
 {
-    return unifex::let_value(async_resolve(*socket._iocp, host_name, port)
+    return unifex::let_value(async_resolve(*socket._iocp, Resolve_Hint::TCP(), host_name, port)
         , [&, buffer](EndpointsList_IPv4& endpoints)
     {
         return unifex::let_value(async_connect(socket, std::move(endpoints))
