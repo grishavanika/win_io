@@ -17,8 +17,10 @@ static auto read_some_write(Server& state)
         {
             printf("read='%.*s'.\n", int(n), state._buffer.data());
             return state._server->async_send_to(state._buffer.first(n), state._sender)
-                // Ignore return value.
-                | unifex::then([](auto&&...) {});
+                | unifex::then([&state](std::size_t n)
+            {
+                printf("write='%.*s'.\n", int(n), state._buffer.data());
+            });
         });
     }));
 }

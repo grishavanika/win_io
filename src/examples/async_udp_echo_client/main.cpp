@@ -30,8 +30,10 @@ static auto write_read(Client& state)
                 printf("write='%.*s'.\n", int(n), state._buffer.data());
                 return unroll(state._socket->async_receive_from(state._buffer, state._sender)
                         , *state._socket->_iocp, state._calls_count)
-                    // Ignore return value.
-                    | unifex::then([](auto&&...) {});
+                    | unifex::then([&state](std::size_t n)
+                    {
+                        printf("read='%.*s'.\n", int(n), state._buffer.data());
+                    });
             });
         }));
     });
