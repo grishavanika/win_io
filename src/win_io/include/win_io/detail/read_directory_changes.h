@@ -299,7 +299,7 @@ namespace wi
         void* buffer_ = nullptr;
         WinULONG_PTR dir_key_{};
         WinOVERLAPPED ov_{};
-        WinDWORD length_ = 0;
+        WinDWORD length_bytes_ = 0;
         WinDWORD notify_filter_ = 0;
         bool owns_directory_ = false;
         bool watch_sub_tree_ = false;
@@ -509,7 +509,7 @@ namespace wi
         o.buffer_ = buffer;
         o.dir_key_ = dir_key;
         o.ov_ = {};
-        o.length_ = length;
+        o.length_bytes_ = length;
         o.notify_filter_ = notify_filter;
         o.owns_directory_ = false;
         o.watch_sub_tree_ = watch_sub_tree;
@@ -546,7 +546,7 @@ namespace wi
         , buffer_(std::exchange(rhs.buffer_, nullptr))
         , dir_key_(std::exchange(rhs.dir_key_, 0))
         , ov_{}
-        , length_(std::exchange(rhs.length_, 0))
+        , length_bytes_(std::exchange(rhs.length_bytes_, 0))
         , notify_filter_(std::exchange(rhs.notify_filter_, 0))
         , owns_directory_(std::exchange(rhs.owns_directory_, false))
         , watch_sub_tree_(std::exchange(rhs.watch_sub_tree_, false))
@@ -567,7 +567,7 @@ namespace wi
         buffer_ = std::exchange(rhs.buffer_, nullptr);
         dir_key_ = std::exchange(rhs.dir_key_, 0);
         ov_ = rhs.ov_;
-        length_ = std::exchange(rhs.length_, 0);
+        length_bytes_ = std::exchange(rhs.length_bytes_, 0);
         notify_filter_ = std::exchange(rhs.notify_filter_, 0);
         owns_directory_ = std::exchange(rhs.owns_directory_, false);
         watch_sub_tree_ = std::exchange(rhs.watch_sub_tree_, false);
@@ -622,7 +622,7 @@ namespace wi
         ec = std::error_code();
         // See ::ReadDirectoryChangesExW(): starting from Windows 10.
         const BOOL status = ::ReadDirectoryChangesW(directory_
-            , buffer_, length_, watch_sub_tree_, notify_filter_
+            , buffer_, length_bytes_, watch_sub_tree_, notify_filter_
             , nullptr, &detail::GetOverlapped(ov_), nullptr);
         if (!status)
         {

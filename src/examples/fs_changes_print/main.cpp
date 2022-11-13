@@ -1,27 +1,17 @@
 #include <win_io/detail/read_directory_changes.h>
 
-#include <date/date.h>
-
-#include <string>
 #include <string_view>
-#include <iostream>
-#include <exception>
-
 #include <cstdio>
-
 #include <Windows.h>
 
 using namespace wi;
 
-using PrintChangesError = std::runtime_error;
-
 struct Options
 {
-    bool watch_sub_tree = false;
-    DWORD notify_filter = FILE_NOTIFY_CHANGE_FILE_NAME;
+    bool watch_sub_tree = true; // recursive by default
+    DWORD notify_filter = 0;
     const wchar_t* directory = L".";
     bool verbose = false;
-    bool print_help = false;
     bool print_time = false;
 };
 
@@ -32,7 +22,7 @@ struct FlagMeta
     const wchar_t* const description;
 };
 
-const FlagMeta k_notify_filters[] =
+static const FlagMeta k_notify_filters[] =
 {
     {FILE_NOTIFY_CHANGE_FILE_NAME,   L"f", L"File name change (renaming, creating, or deleting a file)"},
     {FILE_NOTIFY_CHANGE_DIR_NAME,    L"d", L"Directory name change (creating or deleting a directory)"},
@@ -44,7 +34,7 @@ const FlagMeta k_notify_filters[] =
     {FILE_NOTIFY_CHANGE_SECURITY,    L"s", L"Security descriptor change"},
 };
 
-const FlagMeta k_actions[] =
+static const FlagMeta k_actions[] =
 {
     {FILE_ACTION_ADDED,             L"a", L"File was added to the directory"},
     {FILE_ACTION_REMOVED,           L"r", L"File was removed from the directory"},
@@ -53,10 +43,9 @@ const FlagMeta k_actions[] =
     {FILE_ACTION_RENAMED_NEW_NAME,  L"n", L"File was renamed and this is the new name"},
 };
 
-static const wchar_t k_flags_start     = L'+';
-static const wchar_t k_opt_recursive[] = L"r";
-static const wchar_t k_opt_help[]      = L"h";
-static const wchar_t k_opt_verbose[]   = L"v";
+static const wchar_t k_flags_start        = L'+';
+static const wchar_t k_opt_NO_recursive[] = L".";
+static const wchar_t k_opt_verbose[]      = L"v";
 
 const struct
 {
@@ -64,22 +53,20 @@ const struct
     const wchar_t* const description;
 } k_args[] =
 {
-    {k_opt_recursive, L"Recursive directory watch (watch with subtree)"},
-    {k_opt_verbose,   L"Verbose output to stderr (errors + options)"},
-    {k_opt_help,      L"Print help and exit"},
+    {k_opt_NO_recursive, L"Disable recursive directory watch"},
+    {k_opt_verbose,      L"Verbose output to stderr (errors + options)"},
 };
 
-static std::wstring_view GetActionArg(DWORD action_id)
+static const wchar_t* GetActionArg(DWORD action_id)
 {
     for (const auto& action : k_actions)
     {
         if (action.flag == action_id)
-        {
             return action.arg;
-        }
     }
-
-    throw PrintChangesError("Unknown action: " + std::to_string(action_id));
+    fprintf(stderr, "Unexpected action: %u\n"
+        , unsigned(action_id));
+    abort();
 }
 
 static DWORD GetFilterFromString(std::wstring_view str)
@@ -88,114 +75,238 @@ static DWORD GetFilterFromString(std::wstring_view str)
     {
         // std::string_view operator==() for const char* is missing
         if (str.compare(filter.arg) == 0)
-        {
             return filter.flag;
-        }
     }
-
-    throw PrintChangesError("Invalid filter string");
+    fprintf(stderr, "Unexpected filter string: %.*S\n"
+        , int(str.size())
+        , str.data());
+    abort();
 }
 
 static std::wstring_view GetFileNameOnly(std::wstring_view exe_path)
 {
-    const auto pos = exe_path.find_last_of(L"\\/");
+    const std::size_t pos = exe_path.find_last_of(L"\\/");
     if (pos == exe_path.npos)
-    {
         return exe_path;
-    }
     return exe_path.substr(pos + 1);
 }
 
-static void PrettyPrintDirectoryChange(
+static void LogDirectoryChange(
       const Options& options
     , const DirectoryChange& change
+    , const char* time_str)
+{
+    if (options.print_time && time_str)
+        fprintf(stdout, "[%s] ", time_str);
+
+    fprintf(stdout, "%C%S %.*S\n"
+        , k_flags_start
+        , GetActionArg(change.action)
+        , int(change.name.size())
+        , change.name.data());
+}
+
+static void LogChanges(const Options& options
+    , const DirectoryChangesRange& range
     , std::chrono::system_clock::time_point time)
 {
-    using namespace date;
-
+    char time_buffer[1024]; // uninitialized
+    const char* time_str = nullptr;
     if (options.print_time)
     {
-        std::wcout << L"[" << time << L"] ";
+        const time_t c_time = std::chrono::system_clock::to_time_t(time);
+        struct tm tm;
+        const errno_t e = localtime_s(&tm, &c_time);
+        if (e)
+            abort();
+        if (strftime(time_buffer, std::size(time_buffer), "%H:%M:%S", &tm) == 0)
+            abort();
+        time_str = time_buffer;
     }
 
-    std::wcout << k_flags_start
-        << GetActionArg(change.action)
-        << L" " << change.name << L"\n";
+    for (const DirectoryChange& change : range)
+        LogDirectoryChange(options, change, time_str);
+    fflush(stdout);
 }
 
-static void PrettyPrintOptions(std::wstring_view exe_path, const Options& options)
+static int LogError(const Options& options
+    , const char* message
+    , const std::error_code& ec = std::error_code())
 {
-    std::wcout << L"  " << GetFileNameOnly(exe_path) << L" ";
-    std::wcout << options.directory << L" ";
+    if (!options.verbose)
+        return -1;
+    if (!ec)
+        fprintf(stderr, "%s\n", message);
+    else
+        fprintf(stderr, "%s: %s\n", message, ec.message().c_str());
+    return -1;
+}
 
-    std::wcout << k_flags_start;
-    if (options.print_help)
+static void LogUnexpectedPortChanges(const Options& options, const DirectoryChangesResults& results)
+{
+    if (!options.verbose)
+        return;
+
+    if (const PortEntry* port_changes = results.port_changes())
     {
-        std::wcout << k_opt_help;
+        fprintf(stderr, "Unexpected I/O port change. %#llx key, %#llx bytes\n"
+            , std::uint64_t(port_changes->completion_key)
+            , std::uint64_t(port_changes->bytes_transferred));
     }
+    else if (!results.directory_changes())
+        fprintf(stderr, "I/O port change without directory change?\n");
+
+    fprintf(stderr, "Unexpected port changes\n");
+    abort();
+}
+
+static int WatchForever(const Options& options)
+{
+    std::error_code ec;
+    std::optional<IoCompletionPort> port = IoCompletionPort::make(1, ec);
+    if (!port)
+        return LogError(options, "Failed to create IoCompletionPort", ec);
+
+    DWORD buffer[32 * 1024];
+    std::optional<DirectoryChanges> dir_changes = DirectoryChanges::make(
+        options.directory
+        , buffer
+        , sizeof(buffer) // in bytes
+        , options.watch_sub_tree
+        , options.notify_filter
+        , *port
+        , 1/*dir key*/
+        , ec);
+    if (!dir_changes)
+        return LogError(options, "Failed to create DirectoryChanges", ec);
+
+    while (true)
+    {
+        dir_changes->start_watch(ec);
+        if (ec)
+        {
+            LogError(options, "Failed to start watching", ec);
+            continue;
+        }
+        const DirectoryChangesResults results = dir_changes->get(ec);
+        if (ec)
+        {
+            LogError(options, "Failed to get changes", ec);
+            continue;
+        }
+        std::chrono::system_clock::time_point time;
+        if (options.print_time)
+            time = std::chrono::system_clock::now();
+        const DirectoryChangesRange* changes = results.directory_changes();
+        if (!changes)
+        {
+            LogUnexpectedPortChanges(options, results);
+            continue;
+        }
+        LogChanges(options, *changes, time);
+    }
+    return 0;
+}
+
+static void LogOptions(std::wstring_view exe_path, const Options& options)
+{
+    const std::wstring_view exe_name = GetFileNameOnly(exe_path);
+    fprintf(stderr, "(%s) %.*S %S %C"
+        , options.watch_sub_tree ? "recursive" : "non-recursive"
+        , int(exe_name.size())
+        , exe_name.data()
+        , options.directory
+        , k_flags_start);
     if (options.verbose)
-    {
-        std::wcout << k_opt_verbose;
-    }
-    if (options.watch_sub_tree)
-    {
-        std::wcout << k_opt_recursive;
-    }
-    for (const auto& filter : k_notify_filters)
+        fprintf(stderr, "%S", k_opt_verbose);
+    if (!options.watch_sub_tree)
+        fprintf(stderr, "%S", k_opt_NO_recursive);
+    for (const FlagMeta& filter : k_notify_filters)
     {
         if ((options.notify_filter & filter.flag) == filter.flag)
-        {
-            std::wcout << filter.arg;
-        }
+            fprintf(stderr, "%S", filter.arg);
     }
-    std::wcout << L"\n";
+    fprintf(stderr, "\n");
 }
 
-static void PrettyPrintHelp(std::wstring_view exe_path)
+static bool ParseCommandLine(int argc, wchar_t* argv[], Options& options)
 {
-    std::wcout << L"Help:" << "\n";
-    std::wcout << "\n";
-    std::wcout << L"  " << GetFileNameOnly(exe_path) << L" ";
-    std::wcout << L"<directory>" << L" ";
-    std::wcout << k_flags_start << L"flags" << " " << "[time]" << L"\n";
-    std::wcout << "\n";
-    std::wcout << L"Note: " << k_flags_start
-        << " without any flags (or empty filters flags)"
-        << " enables all filters flags." << L"\n";
-    std::wcout << L"Note: " << "'time' arg (print change time) is optional." << L"\n";
+    if (argc < 2)
+    {
+        fprintf(stderr, "Too few arguments\n");
+        return false;
+    }
 
-    std::wcout << L"\n";
-    std::wcout << L"General flags:" << L"\n";
+    options.directory = argv[1];
+    options.notify_filter = 0; // nothing
+    options.watch_sub_tree = true;
+
+    bool enable_all_filters = true;
+    if (argc >= 4)
+        options.print_time = (wcscmp(argv[3], L"time") == 0);
+
+    if (argc >= 3)
+    {
+        const std::wstring_view flags = argv[2];
+        if ((flags.size() < 1)
+            || (flags.front() != k_flags_start))
+        {
+            fprintf(stderr, "Invalid flags: %.*S\n"
+                , int(flags.size()), flags.data());
+            return false;
+        }
+        for (wchar_t filter_char : flags.substr(1)/*no + prefix*/)
+        {
+            const std::wstring_view filter_str(&filter_char, 1);
+            if (filter_str.compare(k_opt_NO_recursive) == 0)
+                options.watch_sub_tree = false;
+            else if (filter_str.compare(k_opt_verbose) == 0)
+                options.verbose = true;
+            else
+            {
+                options.notify_filter |= GetFilterFromString(filter_str);
+                enable_all_filters = false;
+            }
+        }
+    }
+
+    if (enable_all_filters)
+    {
+        for (const auto& filter : k_notify_filters)
+            options.notify_filter |= filter.flag;
+    }
+    return true;
+}
+
+static int PrettyPrintHelp(std::wstring_view exe_path)
+{
+    const std::wstring_view exe_name = GetFileNameOnly(exe_path);
+    fprintf(stdout
+        , "Help:\n\n  %.*S <directory> %C<flags> [time]\n\n"
+        , int(exe_name.size())
+        , exe_name.data()
+        , k_flags_start);
+
+    fprintf(stdout, "\nGeneral <flags>:\n");
     for (const auto& arg : k_args)
-    {
-        std::wcout << L"\t" << arg.arg << L": " << arg.description << L"\n";
-    }
-
-    std::wcout << L"\n";
-    std::wcout << L"Input filters flags:" << L"\n";
-    for (const auto& filter : k_notify_filters)
-    {
-        std::wcout << L"\t" << filter.arg << L": " << filter.description << L"\n";
-    }
-
-    std::wcout << L"\n";
-    std::wcout << L"Output actions:" << L"\n";
-    for (const auto& action : k_actions)
-    {
-        std::wcout << L"\t" << action.arg << L": " << action.description << L"\n";
-    }
-
-    std::wcout << L"\n";
-    std::wcout << L"Example:" << L"\n";
+        fprintf(stdout, "\t%S:%S\n", arg.arg, arg.description);
+    fprintf(stdout, "\nInput filters <flags>:\n");
+    for (const auto& arg : k_notify_filters)
+        fprintf(stdout, "\t%S:%S\n", arg.arg, arg.description);
+    fprintf(stdout, "\nOutput actions:\n");
+    for (const auto& arg : k_actions)
+        fprintf(stdout, "\t%S:%S\n", arg.arg, arg.description);
+    
+    fprintf(stdout, "\n");
+    fprintf(stdout, "Example:\n\n");
     Options options;
     options.directory = L"C:\\";
     options.watch_sub_tree = true;
     options.notify_filter = FILE_NOTIFY_CHANGE_FILE_NAME;
     options.print_time = false;
-    PrettyPrintOptions(exe_path, options);
+    LogOptions(exe_path, options);
+    fprintf(stdout, "\n");
 
-    std::wcout << L"\n";
-    std::wcout << L"Possible output:" << L"\n";
     const DirectoryChange changes[] =
     {
         {FILE_ACTION_ADDED,             L"new_file.txt"},
@@ -204,172 +315,13 @@ static void PrettyPrintHelp(std::wstring_view exe_path)
         {FILE_ACTION_RENAMED_NEW_NAME,  L"file_with_new_name.txt"},
     };
 
-    const auto time = std::chrono::system_clock::now();
-    for (const auto& change : changes)
-    {
-        PrettyPrintDirectoryChange(options, change, time);
-    }
+    fprintf(stdout, "Possible output:\n\n");
+    for (const DirectoryChange& change : changes)
+        LogDirectoryChange(options, change, "");
 
-    std::wcout << L"\n";
+    fprintf(stdout, "\n");
+    return -2;
 }
-
-static Options ParseOptions(int argc, wchar_t* argv[])
-{
-    if (argc < 3)
-    {
-        throw PrintChangesError("Expecting 2+ arguments, not "
-            + std::to_string(argc - 1));
-    }
-    Options options;
-    options.directory = argv[1];
-    const std::wstring_view flags = argv[2];
-    if ((flags.size() < 1) || (flags.front() != k_flags_start))
-    {
-        // #TODO: convert wstring to string and add useful context to error message
-        throw PrintChangesError("Invalid flags argument");
-    }
-
-    if (argc >= 4)
-    {
-        options.print_time = (wcscmp(argv[3], L"time") == 0);
-    }
-
-    bool enable_all_filters = true;
-    for (auto filter_char : flags.substr(1))
-    {
-        const std::wstring_view filter_str(&filter_char, 1);
-        if (filter_str.compare(k_opt_recursive) == 0)
-        {
-            options.watch_sub_tree = true;
-        }
-        else if (filter_str.compare(k_opt_verbose) == 0)
-        {
-            options.verbose = true;
-        }
-        else if (filter_str.compare(k_opt_help) == 0)
-        {
-            options.print_help = true;
-        }
-        else
-        {
-            options.notify_filter |= GetFilterFromString(filter_str);
-            enable_all_filters = false;
-        }
-    }
-
-    if (enable_all_filters)
-    {
-        for (const auto& filter : k_notify_filters)
-        {
-            options.notify_filter |= filter.flag;
-        }
-    }
-
-    return options;
-}
-
-static void PrintChanges(const Options& options
-    , const DirectoryChangesRange& range
-    , std::chrono::system_clock::time_point time)
-{
-    for (auto change : range)
-    {
-        PrettyPrintDirectoryChange(options, change, time);
-    }
-    std::wcout.flush();
-}
-
-void HandleError(const Options& options, const char* message
-    , const std::error_code& ec = std::error_code())
-{
-    if (options.verbose)
-    {
-        if (ec)
-        {
-            std::cerr << message << ": " << ec.message() << "\n";
-        }
-        else
-        {
-            std::cerr << message << "\n";
-        }
-    }
-}
-
-static void HandleNonDirectoryResults(const Options& options, const DirectoryChangesResults& results)
-{
-    if (!options.verbose)
-    {
-        return;
-    }
-
-    if (auto port_changes = results.port_changes())
-    {
-        std::cerr << "Unexpected I/O port event" << "\n";
-        (void)port_changes;
-    }
-    else if (!results.directory_changes())
-    {
-        std::cerr << "Unexpected get without any changes" << "\n";
-    }
-
-    throw PrintChangesError("Unreachable code");
-}
-
-static void WatchForever(const Options& options)
-{
-    std::error_code ec;
-    auto port = IoCompletionPort::make(1, ec);
-    if (!port)
-    {
-        HandleError(options, "Failed to create IoCompletionPort", ec);
-        return;
-    }
-
-    DWORD buffer[32 * 1024];
-    auto dir_changes = DirectoryChanges::make(
-        options.directory
-        , buffer
-        , sizeof(buffer)
-        , options.watch_sub_tree
-        , options.notify_filter
-        , *port
-        , 1/*dir key*/
-        , ec);
-    if (!dir_changes)
-    {
-        HandleError(options, "Failed to create DirectoryChanges", ec);
-        return;
-    }
-
-    while (true)
-    {
-        dir_changes->start_watch(ec);
-        if (ec)
-        {
-            HandleError(options, "Failed to start watching", ec);
-            continue;
-        }
-
-        const DirectoryChangesResults results = dir_changes->get(ec);
-        if (ec)
-        {
-            HandleError(options, "Failed to get changes", ec);
-            continue;
-        }
-
-        auto time = std::chrono::system_clock::now();
-
-        auto changes = results.directory_changes();
-        if (!changes)
-        {
-            HandleNonDirectoryResults(options, results);
-            continue;
-        }
-
-        PrintChanges(options, *changes, time);
-    }
-}
-
 
 #if (__clang__)
 #pragma clang diagnostic push
@@ -379,41 +331,16 @@ static void WatchForever(const Options& options)
 
 int wmain(int argc, wchar_t* argv[])
 {
-    // C streams are not used, no need to synchronize
     std::ios::sync_with_stdio(false);
-
-    std::wstring_view exe_path = argv[0];
-    if (argc == 1)
-    {
-        PrettyPrintHelp(exe_path);
-        return EXIT_FAILURE;
-    }
-
+    
     Options options;
-    try
-    {
-        options = ParseOptions(argc, argv);
-    }
-    catch (const PrintChangesError& e)
-    {
-        std::cerr << "Failed to parse command line: " << e.what() << "\n";
-        PrettyPrintHelp(exe_path);
-        return EXIT_FAILURE;
-    }
-
-    if (options.print_help)
-    {
-        PrettyPrintOptions(exe_path, options);
-        PrettyPrintHelp(exe_path);
-        return EXIT_FAILURE;
-    }
-
+    const std::wstring_view exe_path = argv[0];
+    if (!ParseCommandLine(argc, argv, options))
+        return PrettyPrintHelp(exe_path);
     if (options.verbose)
-    {
-        PrettyPrintOptions(exe_path, options);
-    }
+        LogOptions(exe_path, options);
 
-    WatchForever(options);
+    return WatchForever(options);
 }
 
 #if (__clang__)
