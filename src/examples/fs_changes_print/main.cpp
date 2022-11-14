@@ -1,4 +1,4 @@
-#include <win_io/detail/read_directory_changes.h>
+#include <win_io/read_directory_changes.h>
 
 #include <string_view>
 #include <cstdio>

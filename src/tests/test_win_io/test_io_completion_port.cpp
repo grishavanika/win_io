@@ -1,5 +1,5 @@
 #include <gtest/gtest.h>
-#include <win_io/detail/io_completion_port.h>
+#include <win_io/io_completion_port.h>
 
 #include "file_utils.h"
 

@@ -10,7 +10,7 @@
 #endif
 #include <MSWSock.h>
 
-#include <win_io/detail/io_completion_port.h>
+#include <win_io/io_completion_port.h>
 
 #include <unifex/sender_concepts.hpp>
 #include <unifex/sync_wait.hpp>

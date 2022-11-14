@@ -1,5 +1,5 @@
 #pragma once
-#include <win_io/detail/io_completion_port.h>
+#include <win_io/io_completion_port.h>
 
 #include <win_io_coro/detail/intrusive_queue.h>
 

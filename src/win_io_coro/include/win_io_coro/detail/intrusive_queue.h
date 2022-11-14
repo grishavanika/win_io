@@ -15,10 +15,7 @@ namespace wi
             // (Thread-safe pointers-like container).
             // 
             // Note: push() and pop() functions are modified versions of the queue
-            // from cppcoro: https://github.com/lewissbaker/cppcoro/blob/master/lib/io_service.cpp
-            // 
-             // #TODO: learn better implemetation. Now, we do iterate thru all
-            // elements to get last one (first that was added)
+            // FROM cppcoro: https://github.com/lewissbaker/cppcoro/blob/master/lib/io_service.cpp
 
             template<typename T>
             class IntrusiveQueue

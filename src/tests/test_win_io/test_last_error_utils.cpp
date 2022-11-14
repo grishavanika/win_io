@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include <win_io/detail/io_completion_port.h>
+#include <win_io/io_completion_port.h>
 
 TEST(LastError, GetLastWinError_Returns_Proper_Last_Error)
 {

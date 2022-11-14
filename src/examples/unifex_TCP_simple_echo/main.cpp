@@ -25,7 +25,7 @@ int main()
     while (processed < write_data.size())
     {
         const std::size_t remaining = (write_data.size() - processed);
-        const std::size_t size = std::min(remaining, std::size_t(1 * 1024 * buffer_size_KBs));
+        const std::size_t size = (std::min)(remaining, std::size_t(1 * 1024 * buffer_size_KBs));
         to_write.push_back(BufferRef(&write_data[processed], std::uint32_t(size)));
         processed += size;
     }
