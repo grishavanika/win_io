@@ -1,8 +1,12 @@
 
-# How to build.
+# How to build
+
+vcpkg is used for package management. Just:
 
 ```
-mkdir build && cd build
-cmake -G "Visual Studio 17 2022" -DCMAKE_TOOLCHAIN_FILE=C:/libs/vcpkg/scripts/buildsystems/vcpkg.cmake -A x64 ..
-cmake --build . --config Debug
+cmake -S . -B build ^
+	-DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT%/scripts/buildsystems/vcpkg.cmake
 ```
+
+Old and specific version of libunifex is used via FetchContent since breaking
+API changes are present since those samples were initialli written.
