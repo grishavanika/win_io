@@ -1,0 +1,3 @@
+add_executable(unifex_tcp_echo_client "main.cpp")
+set_all_warnings(unifex_tcp_echo_client PRIVATE)
+target_link_libraries(unifex_tcp_echo_client PRIVATE win_socks)

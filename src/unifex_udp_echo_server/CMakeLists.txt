@@ -1,0 +1,3 @@
+add_executable(unifex_udp_echo_server "main.cpp")
+set_all_warnings(unifex_udp_echo_server PRIVATE)
+target_link_libraries(unifex_udp_echo_server PRIVATE win_socks)
