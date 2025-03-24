@@ -1,10 +1,16 @@
 #include <win_io/read_directory_changes.h>
-
 #include <string_view>
 #include <cstdio>
 #include <Windows.h>
 
 using namespace wi;
+
+#if (__clang__)
+#pragma clang diagnostic push
+// printf("%.*S", length, data);
+// precision used with 'S' conversion specifier, resulting in undefined behavior
+#pragma clang diagnostic ignored "-Wformat"
+#endif
 
 struct Options
 {
@@ -38,14 +44,14 @@ static const FlagMeta k_actions[] =
 {
     {FILE_ACTION_ADDED,             L"a", L"File was added to the directory"},
     {FILE_ACTION_REMOVED,           L"r", L"File was removed from the directory"},
-    {FILE_ACTION_MODIFIED,          L"m", L"File was modified (time stamp or attributes)"},
+    {FILE_ACTION_MODIFIED,          L"m", L"File was modified (timestamp or attributes)"},
     {FILE_ACTION_RENAMED_OLD_NAME,  L"o", L"File was renamed and this is the old name"},
     {FILE_ACTION_RENAMED_NEW_NAME,  L"n", L"File was renamed and this is the new name"},
 };
 
-static const wchar_t k_flags_start        = L'+';
+static const wchar_t k_flags_start = L'+';
 static const wchar_t k_opt_NO_recursive[] = L".";
-static const wchar_t k_opt_verbose[]      = L"v";
+static const wchar_t k_opt_verbose[] = L"v";
 
 const struct
 {
@@ -92,7 +98,7 @@ static std::wstring_view GetFileNameOnly(std::wstring_view exe_path)
 }
 
 static void LogDirectoryChange(
-      const Options& options
+    const Options& options
     , const DirectoryChange& change
     , const char* time_str)
 {
@@ -211,12 +217,11 @@ static int WatchForever(const Options& options)
 static void LogOptions(std::wstring_view exe_path, const Options& options)
 {
     const std::wstring_view exe_name = GetFileNameOnly(exe_path);
-    fprintf(stderr, "(%s) %.*S %S %C"
+    fprintf(stderr, "(%s) %.*S %S "
         , options.watch_sub_tree ? "recursive" : "non-recursive"
         , int(exe_name.size())
         , exe_name.data()
-        , options.directory
-        , k_flags_start);
+        , options.directory);
     if (options.verbose)
         fprintf(stderr, "%S", k_opt_verbose);
     if (!options.watch_sub_tree)
@@ -232,49 +237,42 @@ static void LogOptions(std::wstring_view exe_path, const Options& options)
 static bool ParseCommandLine(int argc, wchar_t* argv[], Options& options)
 {
     if (argc < 2)
-    {
-        fprintf(stderr, "Too few arguments\n");
         return false;
-    }
 
     options.directory = argv[1];
     options.notify_filter = 0; // nothing
     options.watch_sub_tree = true;
 
-    bool enable_all_filters = true;
-    if (argc >= 4)
-        options.print_time = (wcscmp(argv[3], L"time") == 0);
-
-    if (argc >= 3)
+    for (int i = 2; i < argc; ++i)
     {
-        const std::wstring_view flags = argv[2];
-        if ((flags.size() < 1)
-            || (flags.front() != k_flags_start))
+        if (!options.print_time && (wcscmp(argv[i], L"time") == 0))
         {
-            fprintf(stderr, "Invalid flags: %.*S\n"
-                , int(flags.size()), flags.data());
-            return false;
+            options.print_time = true;
+            continue;
         }
-        for (wchar_t filter_char : flags.substr(1)/*no + prefix*/)
+        if (options.notify_filter == 0)
         {
-            const std::wstring_view filter_str(&filter_char, 1);
-            if (filter_str.compare(k_opt_NO_recursive) == 0)
-                options.watch_sub_tree = false;
-            else if (filter_str.compare(k_opt_verbose) == 0)
-                options.verbose = true;
-            else
+            const std::wstring_view flags = argv[i];
+            for (wchar_t filter_char : flags)
             {
-                options.notify_filter |= GetFilterFromString(filter_str);
-                enable_all_filters = false;
+                const std::wstring_view filter_str(&filter_char, 1);
+                if (filter_str.compare(k_opt_NO_recursive) == 0)
+                    options.watch_sub_tree = false;
+                else if (filter_str.compare(k_opt_verbose) == 0)
+                    options.verbose = true;
+                else
+                    options.notify_filter |= GetFilterFromString(filter_str);
             }
+            continue;
         }
     }
 
-    if (enable_all_filters)
-    {
+    if (options.notify_filter == 0)
+    { // enable all if nothing set
         for (const auto& filter : k_notify_filters)
             options.notify_filter |= filter.flag;
     }
+
     return true;
 }
 
@@ -282,46 +280,44 @@ static int PrettyPrintHelp(std::wstring_view exe_path)
 {
     const std::wstring_view exe_name = GetFileNameOnly(exe_path);
     fprintf(stdout
-        , "Help:\n\n  %.*S <directory> %C<flags> [time]\n\n"
-        , int(exe_name.size())
-        , exe_name.data()
-        , k_flags_start);
+        , "\n  %.*S <directory> [<FLAGS>] [time]\n"
+        , int(exe_name.size()), exe_name.data());
 
-    fprintf(stdout, "\nGeneral <flags>:\n");
+    fprintf(stdout, "\n<FLAGS> (to control events to listen to):\n");
     for (const auto& arg : k_args)
-        fprintf(stdout, "\t%S:%S\n", arg.arg, arg.description);
-    fprintf(stdout, "\nInput filters <flags>:\n");
+        fprintf(stdout, "  %S: %S\n", arg.arg, arg.description);
     for (const auto& arg : k_notify_filters)
-        fprintf(stdout, "\t%S:%S\n", arg.arg, arg.description);
-    fprintf(stdout, "\nOutput actions:\n");
+        fprintf(stdout, "  %S: %S\n", arg.arg, arg.description);
+
+    fprintf(stdout, "\n\nOutput log symbols meaning:\n");
     for (const auto& arg : k_actions)
-        fprintf(stdout, "\t%S:%S\n", arg.arg, arg.description);
-    
-    fprintf(stdout, "\n");
-    fprintf(stdout, "Example:\n\n");
-    Options options;
-    options.directory = L"C:\\";
-    options.watch_sub_tree = true;
-    options.notify_filter = FILE_NOTIFY_CHANGE_FILE_NAME;
-    options.print_time = false;
-    LogOptions(exe_path, options);
-    fprintf(stdout, "\n");
+        fprintf(stdout, "  %C%S: %S\n", k_flags_start, arg.arg, arg.description);
 
-    const DirectoryChange changes[] =
-    {
-        {FILE_ACTION_ADDED,             L"new_file.txt"},
-        {FILE_ACTION_RENAMED_OLD_NAME,  L"file_with_old_name.txt"},
-        {FILE_ACTION_REMOVED,           L"file_was_removed.txt"},
-        {FILE_ACTION_RENAMED_NEW_NAME,  L"file_with_new_name.txt"},
-    };
-
-    fprintf(stdout, "Possible output:\n\n");
-    for (const DirectoryChange& change : changes)
-        LogDirectoryChange(options, change, "");
+    fprintf(stdout, "\n");
+    fprintf(stdout, "Examples:\n\n");
+    fprintf(stdout,
+        "  # Log everything that happens with 'C:\\' folder and subfolders\n"
+        "  %.*S C:\\\n\n"
+        , int(exe_name.size()), exe_name.data());
+    fprintf(stdout,
+        "  # Log everything that happens with 'C:\\Users' folder and subfolders with timestamp\n"
+        "  %.*S C:\\Users time\n\n"
+        , int(exe_name.size()), exe_name.data());
+    fprintf(stdout,
+        "  # Log files size change for 'D:\\' folder and subfolders\n"
+        "  %.*S D:\\ s\n\n"
+        , int(exe_name.size()), exe_name.data());
+    fprintf(stdout,
+        "  # Log folders create/remove for 'D:\\dev' folder-only with timestamp\n"
+        "  %.*S D:\\dev .d time\n\n"
+        , int(exe_name.size()), exe_name.data());
 
     fprintf(stdout, "\n");
     return -2;
 }
+#if (__clang__)
+#pragma clang diagnostic pop
+#endif
 
 #if (__clang__)
 #pragma clang diagnostic push
@@ -332,7 +328,7 @@ static int PrettyPrintHelp(std::wstring_view exe_path)
 int wmain(int argc, wchar_t* argv[])
 {
     std::ios::sync_with_stdio(false);
-    
+
     Options options;
     const std::wstring_view exe_path = argv[0];
     if (!ParseCommandLine(argc, argv, options))

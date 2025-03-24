@@ -9,4 +9,4 @@ cmake -S . -B build ^
 ```
 
 Old and specific version of libunifex is used via FetchContent since breaking
-API changes are present since those samples were initialli written.
+API changes are present since those samples were initially written.
