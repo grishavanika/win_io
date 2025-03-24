@@ -1,8 +1,3 @@
-# Dependencies (for 'examples' folder and tests).
-
- - RxCpp (<https://github.com/Reactive-Extensions/RxCpp>): `vcpkg install rxcpp:x64-windows`
- - libunifex (<https://github.com/facebookexperimental/libunifex>): `git submodule update --init --recursive`
- - gtest (<https://github.com/google/googletest>): `vcpkg install gtest:x64-windows`
 
 # How to build.
 

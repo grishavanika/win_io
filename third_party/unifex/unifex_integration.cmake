@@ -1,4 +1,5 @@
 # unifex integration
+include(FetchContent)
 include(CMakePrintHelpers)
 
 macro(setup_unifex_from_git)

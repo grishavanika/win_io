@@ -1,6 +1,5 @@
-#include <win_io/detail/read_directory_changes.h>
-#include <win_io/detail/io_completion_port.h>
-#include <win_io/detail/read_directory_changes.h>
+#include <win_io/read_directory_changes.h>
+#include <win_io/io_completion_port.h>
 
 #include <rxcpp/rx.hpp>
 
@@ -75,7 +74,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
     rxs::subject<io::PortEntry> io_port_data;
     rx::observable<io::PortEntry> io_changes = io_port_data.get_observable();
     auto io_port = io_port_data.get_subscriber();
-    
+
     const io::WinDWORD k_filters = 0
         | FILE_NOTIFY_CHANGE_FILE_NAME
         | FILE_NOTIFY_CHANGE_DIR_NAME
@@ -95,96 +94,96 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
         , true/*watch sub tree*/, k_filters, *io_service, 2/*dir_key*/, ec);
     assert(!ec);
 
-    io::DirectoryChanges* dirs[] = {&*dir_watcher_c, &*dir_watcher_d};
+    io::DirectoryChanges* dirs[] = { &*dir_watcher_c, &*dir_watcher_d };
 
     auto dir_events = io_changes
         .group_by([&](io::PortEntry pd)
-        {
+            {
+                for (io::DirectoryChanges* dir : dirs)
+                {
+                    if (dir->is_valid_directory_change(pd))
+                    {
+                        return dir;
+                    }
+                }
+                return static_cast<io::DirectoryChanges*>(nullptr);
+            })
+        .filter([](rx::grouped_observable<io::DirectoryChanges*, io::PortEntry> group)
+            {
+                io::DirectoryChanges* dir = group.get_key();
+                return (dir != nullptr);
+            })
+                .merge_transform([](rx::grouped_observable<io::DirectoryChanges*, io::PortEntry> group)
+                    {
+                        io::DirectoryChanges* dir = group.get_key();
+                        return group.transform([dir](io::PortEntry pd)
+                            {
+                                return DirectoryEvent{ dir, io::DirectoryChangesRange(dir->buffer(), pd) };
+                            });
+                    });
+
+            auto dir_changes = dir_events
+                .merge_transform([](DirectoryEvent event)
+                    {
+                        return rx::observable<>::iterate(event.changes)
+                            .transform([dir_watcher = event.dir_watcher]
+                            (io::DirectoryChange change)
+                                {
+                                    return DirectoryChange{ dir_watcher, change };
+                                });
+                    });
+
+            auto collect_ui = dir_changes
+                .transform([](DirectoryChange change)
+                    {
+                        std::wstringstream data;
+                        data << L"+" << GetActionTitle(change.data.action) << ": ";
+                        data.write(change.data.name.data(), change.data.name.size());
+                        data << L"\n";
+                        return UIModel{ data.str() };
+                    });
+
+            collect_ui.subscribe([](UIModel data)
+                {
+                    std::wcout << data.page;
+                });
+
+            dir_events.subscribe([](DirectoryEvent event)
+                {
+                    // Flush pending UI change.
+                    // (Singe event may produce multiple UI changes).
+                    std::wcout << std::wstring(20, L'-') << std::endl;
+
+                    // Listen to new changes.
+                    // #XXX: errors should be pushed to pipeline
+                    std::error_code ec;
+                    event.dir_watcher->start_watch(ec);
+                    assert(ec);
+                });
+
+            /////////////////////////////////////////////
+            // Start watching initial changes
             for (io::DirectoryChanges* dir : dirs)
             {
-                if (dir->is_valid_directory_change(pd))
+                // #XXX: errors should be pushed to pipeline
+                dir->start_watch(ec);
+                assert(!ec);
+            }
+
+            while (true)
+            {
+                auto data = io_service->get(ec);
+                if (data)
                 {
-                    return dir;
+                    io_port.on_next(std::move(*data));
+                }
+                else
+                {
+                    // #XXX: errors should be pushed to pipeline
+                    assert(ec);
+                    std::cout << "ERROR: " << ec.message() << std::endl;
                 }
             }
-            return static_cast<io::DirectoryChanges*>(nullptr);
-        })
-        .filter([](rx::grouped_observable<io::DirectoryChanges*, io::PortEntry> group)
-        {
-            io::DirectoryChanges* dir = group.get_key();
-            return (dir != nullptr);
-        })
-        .merge_transform([](rx::grouped_observable<io::DirectoryChanges*, io::PortEntry> group)
-        {
-            io::DirectoryChanges* dir = group.get_key();
-            return group.transform([dir](io::PortEntry pd)
-            {
-                return DirectoryEvent{dir, io::DirectoryChangesRange(dir->buffer(), pd)};
-            });
-        });
 
-    auto dir_changes = dir_events
-        .merge_transform([](DirectoryEvent event)
-        {
-            return rx::observable<>::iterate(event.changes)
-                .transform([dir_watcher = event.dir_watcher]
-                    (io::DirectoryChange change)
-                {
-                    return DirectoryChange{dir_watcher, change};
-                });
-        });
-
-    auto collect_ui = dir_changes
-        .transform([](DirectoryChange change)
-        {
-            std::wstringstream data;
-            data << L"+" << GetActionTitle(change.data.action) << ": ";
-            data.write(change.data.name.data(), change.data.name.size());
-            data << L"\n";
-            return UIModel{data.str()};
-        });
-
-    collect_ui.subscribe([](UIModel data)
-    {
-        std::wcout << data.page;
-    });
-
-    dir_events.subscribe([](DirectoryEvent event)
-    {
-        // Flush pending UI change.
-        // (Singe event may produce multiple UI changes).
-        std::wcout << std::wstring(20, L'-') << std::endl;
-
-        // Listen to new changes.
-        // #XXX: errors should be pushed to pipeline
-        std::error_code ec;
-        event.dir_watcher->start_watch(ec);
-        assert(ec);
-    });
-
-    /////////////////////////////////////////////
-    // Start watching initial changes
-    for (io::DirectoryChanges* dir : dirs)
-    {
-        // #XXX: errors should be pushed to pipeline
-        dir->start_watch(ec);
-        assert(!ec);
-    }
-
-    while (true)
-    {
-        auto data = io_service->get(ec);
-        if (data)
-        {
-            io_port.on_next(std::move(*data));
-        }
-        else
-        {
-            // #XXX: errors should be pushed to pipeline
-            assert(ec);
-            std::cout << "ERROR: " << ec.message() << std::endl;
-        }
-    }
-
-    return 0;
+            return 0;
 }

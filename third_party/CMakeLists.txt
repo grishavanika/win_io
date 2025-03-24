@@ -1,3 +1,5 @@
-include(rxcpp/rxcpp_integration.cmake)
-include(gtest/gtest_integration.cmake)
 include(unifex/unifex_integration.cmake)
+
+find_package(GTest CONFIG REQUIRED)
+add_library(GTest_Integrated INTERFACE)
+target_link_libraries(GTest_Integrated INTERFACE GTest::gtest GTest::gmock GTest::gtest_main)
