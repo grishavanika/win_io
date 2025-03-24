@@ -422,7 +422,7 @@ namespace wi::coro
         SingleReadOverlapped& operator=(SingleReadOverlapped&&) = delete;
     };
 
-    static std::uint64_t MaxReadSizePerSingleCall()
+    inline std::uint64_t MaxReadSizePerSingleCall()
     {
         constexpr DWORD max_read = (std::numeric_limits<DWORD>::max)();
         const std::uint64_t by_sector = Rounddowmn(max_read, kSectorSize);
